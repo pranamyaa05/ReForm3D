@@ -35,6 +35,30 @@ REQUIRED_ENV_VARS: Tuple[Tuple[str, str, str], ...] = (
 )
 
 
+#: Known template placeholder values from .env.example that must not pass startup checks.
+PLACEHOLDER_ENV_VALUES: Tuple[str, ...] = (
+    "your_gemini_api_key_here",
+    "your_api_key_here",
+    "replace_me",
+    "changeme",
+    "<your_gemini_api_key>",
+)
+
+
+def _is_missing_or_placeholder(value: object) -> bool:
+    """Return True when a value is None, blank, or an unedited .env.example placeholder."""
+    if value is None:
+        return True
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return True
+        lowered = stripped.lower()
+        if lowered in PLACEHOLDER_ENV_VALUES or lowered.startswith("your_"):
+            return True
+    return False
+
+
 class ConfigurationError(RuntimeError):
     """Raised at startup when required configuration is missing or invalid."""
 
@@ -66,7 +90,8 @@ class Settings(BaseSettings):
     clahe_tile_grid_size: int = Field(default=8, ge=1, le=64)
     reference_retention_min_ratio: float = Field(default=0.85, ge=0.0, le=1.0)
 
-    # --- Stage 1: quality gates ----------------------------------------------
+    # --- Stage 1: scale reference & quality gates ----------------------------
+    coin_diameter_mm: float = Field(default=24.26, gt=0.0)
     blur_threshold: float = Field(default=100.0, ge=0.0)
     min_mean_luminance: float = Field(default=40.0, ge=0.0, le=255.0)
     max_mean_luminance: float = Field(default=220.0, ge=0.0, le=255.0)
@@ -114,18 +139,13 @@ class Settings(BaseSettings):
 
     @property
     def has_gemini_key(self) -> bool:
-        """True when a non-empty API key is configured."""
-        return bool(self.gemini_api_key and self.gemini_api_key.strip())
+        """True when a non-empty, non-placeholder API key is configured."""
+        return not _is_missing_or_placeholder(self.gemini_api_key)
 
     @property
     def vlm_enabled(self) -> bool:
         """True when Stage 2 will call the live Gemini API."""
         return self.has_gemini_key and not self.use_mock_vlm
-
-    def clamp_clearance(self, clearance_mm: Optional[float]) -> float:
-        """Clamp a requested clearance into the configured safe range."""
-        value = self.default_clearance_mm if clearance_mm is None else float(clearance_mm)
-        return max(self.min_clearance_mm, min(self.max_clearance_mm, value))
 
     def clamp_clearance(self, clearance_mm: Optional[float]) -> float:
         """Clamp a requested clearance into the configured safe range."""
@@ -158,7 +178,7 @@ class Settings(BaseSettings):
 
 
 def find_missing_required_env(settings: Settings) -> List[str]:
-    """Return human-readable descriptions of missing required configuration.
+    """Return human-readable descriptions of missing or placeholder configuration.
 
     An entry is *not* reported as missing when its escape-hatch flag is enabled
     (for example ``GEMINI_API_KEY`` when ``USE_MOCK_VLM=true``).
@@ -168,7 +188,7 @@ def find_missing_required_env(settings: Settings) -> List[str]:
         if getattr(settings, escape_flag.lower(), False):
             continue
         value = getattr(settings, var_name.lower(), None)
-        if value is None or (isinstance(value, str) and not value.strip()):
+        if _is_missing_or_placeholder(value):
             missing.append(f"  - {var_name}: {hint} (or set {escape_flag}=true for local dev)")
     return missing
 
@@ -186,7 +206,17 @@ def verify_required_env(settings: Settings) -> None:
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    """Return the process-wide cached :class:`Settings` instance."""
+    """Return the process-wide cached :class:`Settings` instance.
+
+    If the shell environment contains a placeholder ``GEMINI_API_KEY`` (such as
+    ``$env:GEMINI_API_KEY="your_actual_key_here"``), discard it from ``os.environ``
+    so Pydantic reads the real key from ``.env`` instead of being shadowed.
+    """
+    import os
+
+    shell_key = os.environ.get("GEMINI_API_KEY")
+    if shell_key is not None and _is_missing_or_placeholder(shell_key):
+        os.environ.pop("GEMINI_API_KEY", None)
     return Settings()
 
 

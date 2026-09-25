@@ -80,19 +80,35 @@ class ReferenceType(str, Enum):
     other = "other"
 
 
-#: Known real-world size (mm) for each preset. ``COIN_DIAMETER_MM`` in .env is the
-#: documented override point for non-US coins.
+#: Default known real-world sizes (mm) for each preset. Call
+#: :func:`get_reference_known_dimensions` to include any ``COIN_DIAMETER_MM`` override
+#: configured in ``.env``.
 REFERENCE_KNOWN_DIMENSIONS: Dict[str, float] = {
     ReferenceType.coin.value: 24.26,
     ReferenceType.credit_card.value: 85.60,
     ReferenceType.ruler.value: 100.0,
 }
 
+
+def get_reference_known_dimensions(settings: Optional[object] = None) -> Dict[str, float]:
+    """Return known real-world sizes (mm) for each preset, honouring COIN_DIAMETER_MM."""
+    if settings is None:
+        from reform3d.config import get_settings
+
+        settings = get_settings()
+    coin_mm = float(getattr(settings, "coin_diameter_mm", 24.26))
+    return {
+        ReferenceType.coin.value: coin_mm,
+        ReferenceType.credit_card.value: 85.60,
+        ReferenceType.ruler.value: 100.0,
+    }
+
+
 #: Human-readable label + description for the reference picker.
 REFERENCE_DESCRIPTIONS: Dict[str, Dict[str, str]] = {
     ReferenceType.coin.value: {
         "label": "Coin",
-        "detail": "US quarter, 24.26 mm across the widest point.",
+        "detail": "Coin diameter across the widest point (default US quarter 24.26 mm; overridable via COIN_DIAMETER_MM).",
     },
     ReferenceType.credit_card.value: {
         "label": "Credit / bank card",
@@ -350,4 +366,5 @@ __all__ = [
     "SHOT_INSTRUCTIONS",
     "ShotKind",
     "SlotEnhancement",
+    "get_reference_known_dimensions",
 ]

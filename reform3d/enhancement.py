@@ -357,7 +357,12 @@ def _enhance_slot(
     messages: List[str],
 ) -> SlotEnhancement:
     """Enhance one slot, writing the result beside the raw file."""
-    holds_reference = slot.kind.value == REFERENCE_BOX_SHOT
+    target_box_shot = (
+        session.reference.bbox_shot.value
+        if (session.reference is not None and session.reference.bbox_shot is not None)
+        else REFERENCE_BOX_SHOT
+    )
+    holds_reference = slot.kind.value == target_box_shot
     box_for_gate = reference_box if holds_reference else None
 
     raw = cv2.imread(str(slot.raw_path), cv2.IMREAD_COLOR)

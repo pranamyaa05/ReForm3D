@@ -158,8 +158,8 @@ def validate_and_map_cad_args(
     measurements: List[object],
     clearance_mm: Optional[float] = None,
     *,
-    min_dimension_mm: float = 0.5,
-    max_dimension_mm: float = 500.0,
+    min_dimension_mm: Optional[float] = None,
+    max_dimension_mm: Optional[float] = None,
 ) -> CadArgumentValidation:
     """Validate ``measurements`` against ``suggested_template``'s contract.
 
@@ -178,6 +178,15 @@ def validate_and_map_cad_args(
     7. On success inject ``clearance_mm`` into ``mapped_args`` on *both* the clean and
        the low-confidence-only paths, so callers see one consistent shape.
     """
+    if min_dimension_mm is None or max_dimension_mm is None:
+        from reform3d.config import get_settings
+
+        cfg = get_settings()
+        if min_dimension_mm is None:
+            min_dimension_mm = cfg.min_dimension_mm
+        if max_dimension_mm is None:
+            max_dimension_mm = cfg.max_dimension_mm
+
     template = (suggested_template or "").strip()
     choices = ", ".join(sorted(TEMPLATE_FEATURES))
 

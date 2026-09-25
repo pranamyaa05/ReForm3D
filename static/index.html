@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ReForm3D — Parametric 3D Repair Pipeline</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-inner">
+      <div class="brand">
+        <span class="brand-badge">ReForm3D</span>
+        <div>
+          <h1>Repair &amp; Adaptive Attachment Pipeline</h1>
+          <p class="brand-subtitle">Guided Capture &rarr; Safe Enhancement &rarr; Gemini VLM Diagnosis &rarr; Deterministic CadQuery CAD</p>
+        </div>
+      </div>
+      <div class="status-pills">
+        <span id="pill-session" class="pill">Session: Starting...</span>
+        <span id="pill-vlm" class="pill">VLM: Checking...</span>
+        <span id="pill-enhancement" class="pill">Stage 1.5: Checking...</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- Stage Navigation -->
+    <nav class="stage-nav" aria-label="Pipeline stages">
+      <button type="button" class="stage-tab active" data-stage="1">
+        <span class="step-num">Stage 1</span>
+        <span class="step-label">Guided Capture &amp; Scale BBox</span>
+      </button>
+      <button type="button" class="stage-tab" data-stage="1.5">
+        <span class="step-num">Stage 1.5</span>
+        <span class="step-label">Safe Enhancement Preview</span>
+      </button>
+      <button type="button" class="stage-tab" data-stage="2">
+        <span class="step-num">Stage 2</span>
+        <span class="step-label">Diagnosis &amp; Confirmation</span>
+      </button>
+      <button type="button" class="stage-tab" data-stage="3">
+        <span class="step-num">Stage 3 + 4</span>
+        <span class="step-label">3D CAD Preview &amp; Export</span>
+      </button>
+    </nav>
+
+    <div id="global-alert" class="alert-banner hidden" role="alert"></div>
+
+    <!-- ===================== STAGE 1: GUIDED CAPTURE ===================== -->
+    <section id="panel-stage-1" class="card">
+      <div class="card-header">
+        <div>
+          <h2>Stage 1 — Guided Multi-Angle Capture &amp; Scale Calibration</h2>
+          <p>Capture 3 required angles (`straight_on`, `angled`, `mating_surface`) with a known physical scale reference held flat against the part.</p>
+        </div>
+        <button id="btn-demo-populate" type="button" class="btn btn-secondary" title="Generate 3 synthetic test photos + reference bbox for instant desktop testing">
+          Auto-Fill 3 Demo Photos
+        </button>
+      </div>
+
+      <!-- 1A. Reference Selector -->
+      <div>
+        <label>1. Choose Scale Reference Object (Required)</label>
+        <div id="reference-options" class="ref-options"></div>
+        <div id="custom-dimension-wrap" class="hidden" style="max-width: 320px; margin-bottom: 1rem;">
+          <label for="input-custom-dimension">Known Reference Dimension (mm)</label>
+          <input id="input-custom-dimension" type="number" step="0.1" min="1" value="25.0" />
+        </div>
+      </div>
+
+      <!-- 1B. Shot Selector & Instructions -->
+      <div style="margin-top: 1rem;">
+        <label>2. Select Required Camera Slot</label>
+        <div id="shot-selector" class="shot-selector">
+          <button type="button" class="shot-btn active" data-shot="straight_on">
+            <span>(a) Straight-On</span>
+            <span class="shot-status" id="status-straight_on">Pending</span>
+          </button>
+          <button type="button" class="shot-btn" data-shot="angled">
+            <span>(b) Angled (45–90&deg;)</span>
+            <span class="shot-status" id="status-angled">Pending</span>
+          </button>
+          <button type="button" class="shot-btn" data-shot="mating_surface">
+            <span>(c) Mating Surface + Ref</span>
+            <span class="shot-status" id="status-mating_surface">Pending</span>
+          </button>
+        </div>
+
+        <div id="shot-guidance" class="guidance-banner">
+          <h3 id="guidance-title">Straight-on shot</h3>
+          <p id="guidance-body">Point the camera directly at the broken part, square to it. Use even lighting and a plain background.</p>
+          <p id="guidance-tip" style="color: var(--text-muted); font-size: 0.82rem;"></p>
+        </div>
+      </div>
+
+      <!-- 1C. Camera Input & BBox Canvas -->
+      <div class="grid-2">
+        <div>
+          <label for="input-photo-file">3. Capture or Upload Photo for Current Slot</label>
+          <input
+            id="input-photo-file"
+            type="file"
+            accept="image/*"
+            style="margin-bottom: 0.75rem;"
+          />
+          <p style="font-size: 0.82rem; color: var(--text-muted); margin-top: 0;">
+            <strong>Bounding-Box Marking:</strong> Drag on the image canvas to mark the bounding box around your scale reference object (`[x_min, y_min, x_max, y_max]`).
+          </p>
+          <div class="btn-row">
+            <button id="btn-clear-bbox" type="button" class="btn btn-secondary">Clear / Redraw Box</button>
+            <span id="bbox-readout" class="pill">BBox: Not marked</span>
+          </div>
+
+          <div class="btn-row" style="margin-top: 1rem;">
+            <button id="btn-check-quality" type="button" class="btn btn-secondary" disabled>
+              Run Quality Check
+            </button>
+            <button id="btn-save-capture" type="button" class="btn btn-primary" disabled>
+              Save Shot to Session
+            </button>
+          </div>
+
+          <!-- Pre-Enhancement Quality Verdict Box -->
+          <div id="quality-verdict-box" class="verdict-box hidden">
+            <strong id="verdict-title">Quality Verdict</strong>
+            <div id="verdict-metrics" class="metrics-row"></div>
+            <ul id="verdict-warnings" style="margin: 0.5rem 0; padding-left: 1.2rem; font-size: 0.86rem;"></ul>
+            <div id="verdict-override-actions" class="btn-row hidden">
+              <button id="btn-retake-photo" type="button" class="btn btn-secondary">Retake Photo</button>
+              <button id="btn-use-anyway" type="button" class="btn btn-warning">Use Anyway (Override)</button>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <label>Interactive Photo &amp; Reference Bounding-Box Canvas</label>
+          <div class="canvas-wrapper">
+            <canvas id="bbox-canvas" class="hidden"></canvas>
+            <div id="canvas-placeholder" class="canvas-placeholder">
+              Select or capture a photo to preview and drag a bounding box over your reference object.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Session Readiness Footer -->
+      <div style="margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--border); display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 1rem;">
+        <div>
+          <strong id="readiness-label">Session Status: Waiting for 3 photos + marked reference box</strong>
+        </div>
+        <div class="btn-row" style="margin-top: 0;">
+          <button id="btn-proceed-enhance" type="button" class="btn btn-primary" disabled>
+            Proceed to Stage 1.5 Enhancement &rarr;
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== STAGE 1.5: ENHANCEMENT PREVIEW ===================== -->
+    <section id="panel-stage-1.5" class="card hidden">
+      <div class="card-header">
+        <div>
+          <h2>Stage 1.5 — Deterministic Image Enhancement &amp; Reference Retention Gate</h2>
+          <p>CLAHE exposure normalization and rembg background segmentation. If background removal clips the user-marked reference box, ReForm3D automatically falls back to the unenhanced image.</p>
+        </div>
+        <div class="btn-row" style="margin-top: 0;">
+          <button id="btn-run-enhance" type="button" class="btn btn-secondary">Re-Run Enhancement</button>
+          <button id="btn-proceed-diagnose" type="button" class="btn btn-primary">
+            Run Stage 2 VLM Diagnosis &rarr;
+          </button>
+        </div>
+      </div>
+
+      <div id="enhancement-messages"></div>
+      <div id="enhancement-grid" class="grid-3"></div>
+    </section>
+
+    <!-- ===================== STAGE 2: VLM DIAGNOSIS & CONFIRMATION ===================== -->
+    <section id="panel-stage-2" class="card hidden">
+      <div class="card-header">
+        <div>
+          <h2>Stage 2 — Gemini VLM Diagnosis &amp; Human-in-the-Loop Measurement Gate</h2>
+          <p>Review the VLM diagnosis and verify every parameter before CadQuery generates geometry. Low-confidence or mismatched measurements are blocked until explicitly confirmed.</p>
+        </div>
+        <button id="btn-rerun-diagnose" type="button" class="btn btn-secondary">Re-Run VLM Diagnosis</button>
+      </div>
+
+      <div class="grid-2">
+        <!-- Left column: VLM Diagnosis Summary -->
+        <div>
+          <div class="verdict-box" style="margin-top: 0;">
+            <h3 style="margin-top: 0; font-size: 1rem;">VLM Diagnosis Report</h3>
+            <p style="margin: 0.35rem 0;"><strong>Object Identified:</strong> <span id="diag-object">—</span></p>
+            <p style="margin: 0.35rem 0;"><strong>Interaction Primitive:</strong> <span id="diag-primitive" class="pill">—</span></p>
+            <p style="margin: 0.35rem 0;"><strong>Failure Diagnosis:</strong> <span id="diag-failure">—</span></p>
+            <p style="margin: 0.35rem 0;"><strong>VLM Notes:</strong> <span id="diag-notes" style="color: var(--text-muted);">—</span></p>
+          </div>
+
+          <div style="margin-top: 1rem;">
+            <label for="select-template">Parametric Attachment Archetype (`suggested_template`)</label>
+            <select id="select-template">
+              <option value="friction_fit_collar">friction_fit_collar (Cylindrical collar / shaft sleeve)</option>
+              <option value="snap_clip_bracket">snap_clip_bracket (Flexible C-clip bracket)</option>
+              <option value="lever_cap">lever_cap (Slip-on cap with torque lever)</option>
+              <option value="wing_adapter">wing_adapter (Dual-wing butterfly twist adapter)</option>
+              <option value="other">other (Unsupported — will block CAD generation)</option>
+            </select>
+          </div>
+
+          <div style="margin-top: 1rem;">
+            <label for="input-clearance">Safety Mating Clearance (`clearance_mm`)</label>
+            <input id="input-clearance" type="number" step="0.05" min="0.05" max="0.60" value="0.20" />
+            <span style="font-size: 0.78rem; color: var(--text-muted);">Added automatically to inner bores/channels so the printed part slides on without binding.</span>
+          </div>
+
+          <div id="validation-gate-banner" class="alert-banner warn" style="margin-top: 1rem;">
+            Awaiting measurement review.
+          </div>
+        </div>
+
+        <!-- Right column: Editable Per-Template Measurements & Confirmation Gate -->
+        <div>
+          <label>Editable Template Measurements (mm)</label>
+          <div id="measurements-editor"></div>
+
+          <div class="verdict-box" style="margin-top: 1rem;">
+            <label style="display: flex; align-items: center; gap: 0.6rem; cursor: pointer; margin: 0;">
+              <input id="checkbox-user-confirmed" type="checkbox" style="width: 18px; height: 18px;" />
+              <span><strong>I have verified and confirmed these measurements (`user_confirmed = true`)</strong></span>
+            </label>
+            <p style="margin: 0.4rem 0 0; font-size: 0.8rem; color: var(--text-muted);">
+              Unchecked (`user_confirmed = false`) requests with any low-confidence measurement will be rejected by <code>POST /api/generate-cad</code> with HTTP 400.
+            </p>
+          </div>
+
+          <div class="btn-row">
+            <button id="btn-generate-cad" type="button" class="btn btn-primary">
+              Generate Watertight 3D CAD (STL + STEP) &rarr;
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== STAGE 3 + 4: 3D CAD PREVIEW & EXPORT ===================== -->
+    <section id="panel-stage-3" class="card hidden">
+      <div class="card-header">
+        <div>
+          <h2>Stage 3 — Watertight CadQuery Solid &amp; Three.js STL Inspection</h2>
+          <p>Verified single-body watertight solid with post-export Trimesh validation and mating clearance applied.</p>
+        </div>
+        <div class="btn-row" style="margin-top: 0;">
+          <a id="link-download-stl" href="#" download class="btn btn-success">Download STL</a>
+          <a id="link-download-step" href="#" download class="btn btn-secondary">Download STEP</a>
+          <button id="btn-stage4-stub" type="button" class="btn btn-secondary">Run Stage 4 Slicer Stub</button>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div>
+          <div id="stl-viewer-container">
+            <div class="viewer-overlay">
+              <span class="pill" id="viewer-label">Drag to rotate &bull; Scroll to zoom</span>
+              <button id="btn-toggle-wireframe" type="button" class="btn btn-secondary" style="padding: 0.35rem 0.7rem; font-size: 0.78rem;">
+                Toggle Wireframe
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div class="verdict-box pass" style="margin-top: 0;">
+            <h3 style="margin-top: 0; font-size: 1rem;">Mesh Verification Report</h3>
+            <div id="cad-summary-metrics" class="metrics-row"></div>
+            <div id="cad-params-summary" style="font-size: 0.86rem; margin-top: 0.5rem;"></div>
+          </div>
+
+          <div id="stage4-result-box" class="verdict-box hidden" style="margin-top: 1rem;">
+            <h3 style="margin-top: 0; font-size: 0.95rem;">Stage 4 Slicer Preparation (Stub)</h3>
+            <p id="stage4-message" style="font-size: 0.85rem; margin: 0.35rem 0;"></p>
+            <div id="stage4-meta" class="metrics-row"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>

@@ -102,19 +102,16 @@ def mock_diagnosis(
                 feature_name=FeatureName.bore_diameter_mm,
                 estimated_value_mm=12.0,
                 confidence=conf,
-                notes="Mating shaft diameter estimate",
             ),
             MeasurementItem(
                 feature_name=FeatureName.wall_thickness_mm,
                 estimated_value_mm=3.2,
                 confidence=conf,
-                notes="Collar sleeve wall thickness",
             ),
             MeasurementItem(
                 feature_name=FeatureName.height_mm,
                 estimated_value_mm=28.0,
                 confidence=conf,
-                notes="Overall collar height",
             ),
         ]
         obj = "Broken broom handle joint"
@@ -382,10 +379,17 @@ def diagnose_capture(
     """
     config = settings or get_settings()
 
-    # 1. Fall back to mock if configured or missing key
-    if config.use_mock_vlm or not config.vlm_enabled:
-        logger.info("Using offline mock VLM provider (use_mock_vlm=%s)", config.use_mock_vlm)
+    # 1. Use offline mock ONLY when explicitly enabled via USE_MOCK_VLM=true.
+    if config.use_mock_vlm:
+        logger.info("Using offline mock VLM provider (USE_MOCK_VLM=true)")
         return mock_diagnosis(session)
+
+    if not config.has_gemini_key:
+        raise VLMPermanentError(
+            "GEMINI_API_KEY is missing or set to a placeholder value. "
+            "Set a valid GEMINI_API_KEY in .env, or set USE_MOCK_VLM=true for offline development.",
+            status_code=500,
+        )
 
     # 2. Lazy import Google GenAI SDK
     try:
@@ -396,7 +400,11 @@ def diagnose_capture(
             "google-genai package is not installed. Run 'pip install google-genai>=2.0'."
         ) from err
 
-    client = genai.Client(api_key=config.gemini_api_key)
+    timeout_ms = int(config.gemini_request_timeout_s * 1000)
+    client = genai.Client(
+        api_key=config.gemini_api_key,
+        http_options=types.HttpOptions(timeout=timeout_ms),
+    )
 
     # 3. Assemble images
     # We inspect slots in canonical order (straight_on, angled, mating_surface)

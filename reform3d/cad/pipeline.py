@@ -265,7 +265,10 @@ def _export_and_verify(
         report = validate_exported_stl(stl_path)
     except CADValidationError as exc:
         logger.warning("Exported STL failed validation: %s", exc.message)
-        return None, stl_path, step_path
+        for path in (stl_path, step_path):
+            if path is not None and path.exists():
+                path.unlink(missing_ok=True)
+        return None, None, None
 
     return report, stl_path, step_path
 

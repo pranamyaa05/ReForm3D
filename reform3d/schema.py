@@ -9,8 +9,8 @@ Three things live here and nowhere else:
    enum baked into the Gemini response schema, the model cannot invent a parameter.
 3. :data:`TEMPLATE_FEATURES` - the *per-template* required/optional parameter sets.
    This is what makes the mapping conditional on ``suggested_template``: a name can be
-   globally legal and still wrong for the chosen template. That is rejected here and
-   again, authoritatively, in :mod:`reform3d.mapping`.
+   globally legal and still wrong for the chosen template. That is enforced
+   authoritatively in :mod:`reform3d.mapping`.
 
 An import-time assertion guarantees every name referenced by :data:`TEMPLATE_FEATURES`
 is a member of :class:`FeatureName`; renaming a generator parameter without updating
@@ -22,7 +22,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Dict, FrozenSet, List
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 
 class SuggestedTemplate(str, Enum):
@@ -271,31 +271,6 @@ class DiagnosisResult(BaseModel):
             "reference object was clearly detected."
         ),
     )
-
-    @model_validator(mode="after")
-    def _features_match_template(self) -> "DiagnosisResult":
-        """Conditional check: feature names must be legal *for this template*.
-
-        A name can exist in :class:`FeatureName` and still be wrong for the selected
-        archetype. Raising here surfaces the problem as a validation error so the app
-        routes the user into the manual-confirmation form instead of passing a
-        mismatched parameter set to CadQuery.
-        """
-        template = self.suggested_template.value
-        if template == SuggestedTemplate.other.value:
-            return self
-
-        allowed = allowed_feature_names(template)
-        unexpected = sorted(
-            {item.feature_name.value for item in self.measurements} - allowed
-        )
-        if unexpected:
-            raise ValueError(
-                "measurements contain feature names that are not valid for "
-                f"'{template}': {', '.join(unexpected)}. "
-                f"Legal names for this template: {', '.join(sorted(allowed))}."
-            )
-        return self
 
 
 def template_prompt_block() -> str:

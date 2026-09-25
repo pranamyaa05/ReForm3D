@@ -475,21 +475,16 @@ def lever_cap(
 
     lever_width = wall * _LEVER_WIDTH_FACTOR
     lever_thickness = wall
-    lever_start = outer_radius * _LEVER_EMBED_FRACTION
+    lever_start = bore_radius + wall * 0.4
     lever_end = outer_radius + lever_length
     lever_z = height * _LEVER_HEIGHT_FRACTION
 
     try:
         cap = cq.Workplane("XY").circle(outer_radius).extrude(height)
-        cap = (
-            cap.faces(">Z")
-            .workplane()
-            .circle(bore_radius)
-            .cutBlind(-socket_depth)
-        )
 
         # Lever: a rectangle with a semicircular end, drawn in the XY plane and lifted
-        # to the grip height.
+        # to the grip height. Root starts inside the wall (between bore_radius and
+        # outer_radius) so it fuses cleanly without intruding into the socket bore.
         half_lever = lever_width / 2.0
         lever = (
             cq.Workplane("XY")
@@ -504,8 +499,15 @@ def lever_cap(
             .translate((0.0, 0.0, lever_z))
         )
 
-        part = cap.union(lever)
-        part = _fillet_edges(part, "|Z", min(wall * 0.4, 1.0), enabled=decorative)
+        part = (
+            cap.union(lever)
+            .faces(">Z")
+            .workplane()
+            .circle(bore_radius)
+            .cutBlind(-socket_depth)
+        )
+        lead_in = min(wall * 0.3, bore_radius * 0.2, socket_depth * 0.2)
+        part = _chamfer_face_edges(part, ">Z", "%CIRCLE", lead_in, enabled=decorative)
     except Exception as exc:  # noqa: BLE001 - wrap OpenCascade failures
         raise CADGenerationError(
             f"Could not build the lever cap: {exc}",
@@ -523,7 +525,7 @@ def lever_cap(
 _WING_ROOT_WIDTH_FACTOR = 3.0  # wing root width = 3 x wall thickness
 _WING_TIP_WIDTH_FACTOR = 1.6  # wing tip width = 1.6 x wall thickness
 _WING_HEIGHT_FRACTION = 0.8  # wings are 80% of the hub height
-_WING_EMBED_FRACTION = 0.5  # wings start at 50% of the hub radius, so they fuse
+_WING_EMBED_FRACTION = 0.4  # wings start 40% into the wall so they fuse without entering bore
 
 
 def wing_adapter(
@@ -582,7 +584,7 @@ def wing_adapter(
     root_width = wall * _WING_ROOT_WIDTH_FACTOR
     tip_width = wall * _WING_TIP_WIDTH_FACTOR
     wing_height = hub_height * _WING_HEIGHT_FRACTION
-    embed_radius = outer_radius * _WING_EMBED_FRACTION
+    embed_radius = bore_radius + wall * _WING_EMBED_FRACTION
 
     _check_walls(
         template,
