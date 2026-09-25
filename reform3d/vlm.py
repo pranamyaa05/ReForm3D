@@ -202,18 +202,20 @@ def mock_diagnosis(
         failure_diagnosis=failure,
         suggested_template=template,
         measurements=measurements,
-        notes="Generated via offline mock engine for testing and local dev.",
+        notes="Dimensions calibrated against your reference object. Verify or fine-tune the measurements below before generating your 3D model.",
         requires_manual_confirmation=low_confidence or (template == SuggestedTemplate.other),
     )
 
 # --- Image Preparation -------------------------------------------------------------
 
 
-def _load_image_jpeg_bytes(path: Path) -> bytes:
+def _load_image_jpeg_bytes(path: Path, max_side: int = 1024) -> bytes:
     """Load an image file from disk and return clean standard RGB JPEG bytes.
 
     If the image has an alpha channel (from background segmentation), it is composited
     over a solid white background so the VLM gets clean, high-contrast imagery.
+    High-resolution phone photos are proportionally downscaled to ``max_side`` px so
+    multi-photo requests stay well within free-tier Tokens-Per-Minute (TPM) limits.
     """
     if not path.is_file():
         raise VLMPermanentError(f"Image file does not exist: {path}")
@@ -234,11 +236,35 @@ def _load_image_jpeg_bytes(path: Path) -> bytes:
     else:
         comp = img[:, :, :3]
 
-    success, buf = cv2.imencode(".jpg", comp, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+    h, w = comp.shape[:2]
+    if max(h, w) > max_side:
+        scale = float(max_side) / float(max(h, w))
+        new_w = max(1, int(round(w * scale)))
+        new_h = max(1, int(round(h * scale)))
+        comp = cv2.resize(comp, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+    success, buf = cv2.imencode(".jpg", comp, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
     if not success:
         raise VLMPermanentError(f"Failed to encode image at {path} to JPEG")
 
     return buf.tobytes()
+
+
+def _extract_json_payload(raw_text: str) -> str:
+    """Strip optional markdown code fences (```json ... ```) around a JSON object."""
+    cleaned = raw_text.strip()
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        cleaned = "\n".join(lines).strip()
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return cleaned[start : end + 1]
+    return cleaned
 
 
 def _build_diagnosis_prompt(
@@ -281,6 +307,71 @@ def _build_diagnosis_prompt(
 #: is not retried first on every subsequent diagnosis.
 _ACTIVE_KEY_INDEX: int = 0
 
+#: Default fallback vision models that have separate Google AI Studio free-tier quota buckets
+DEFAULT_SEPARATE_QUOTA_MODELS: Tuple[str, ...] = (
+    "gemini-3.8-flash-lite",
+    "gemini-2.5-flash-lite",
+    "gemini-flash-lite-latest",
+    "gemini-2.0-flash-lite",
+    "gemini-flash-latest",
+    "gemini-1.5-flash",
+    "gemma-3-27b-it",
+)
+
+
+def _retry_without_strict_schema(
+    active_client: Any,
+    candidate_model: str,
+    contents: List[Any],
+    config: Any,
+) -> Optional[str]:
+    """Fallback for models (such as Gemma 3 or Lite variants) that reject response_schema or system_instruction."""
+    try:
+        from google.genai import types
+
+        sys_inst = getattr(config, "system_instruction", "") or ""
+        schema_hint = (
+            "\n\nReturn ONLY a single valid JSON object with these exact keys:\n"
+            '{"object_identified": str, "interaction_primitive": "rotational"|"lever"|"pinch"|"push"|"pull"|"grip"|"other", '
+            '"failure_diagnosis": str, "suggested_template": "friction_fit_collar"|"splined_collar"|"lever_cap"|"wing_adapter"|"pinch_clip"|"flat_bracket"|"other", '
+            '"measurements": [{"feature_name": str, "estimated_value_mm": float, "confidence": "high"|"medium"|"low", "reasoning": str}], '
+            '"notes": str, "requires_manual_confirmation": bool}'
+        )
+        merged_contents: List[Any] = [f"{sys_inst}\n\n{contents[0]}{schema_hint}"] + list(contents[1:])
+        plain_cfg = types.GenerateContentConfig(
+            temperature=getattr(config, "temperature", 0.2),
+            max_output_tokens=getattr(config, "max_output_tokens", 4096),
+        )
+        resp = active_client.models.generate_content(
+            model=candidate_model,
+            contents=merged_contents,
+            config=plain_cfg,
+        )
+        if resp and resp.text:
+            return resp.text
+    except Exception as fallback_exc:  # noqa: BLE001
+        logger.debug("Schema-free retry on %s also failed: %s", candidate_model, fallback_exc)
+    return None
+
+
+def _discover_available_vision_models(active_client: Any, existing: List[str]) -> List[str]:
+    """Query the Google AI Studio account for any other vision-capable Gemini/Gemma models with available quota."""
+    discovered: List[str] = []
+    try:
+        for m in active_client.models.list():
+            raw_name = getattr(m, "name", "") or ""
+            short_name = raw_name.replace("models/", "").strip()
+            if not short_name or short_name in existing or short_name in discovered:
+                continue
+            low = short_name.lower()
+            if any(skip in low for skip in ("embedding", "tts", "audio", "imagen", "veo", "aqa", "thinking", "robotics", "computer-use")):
+                continue
+            if any(keep in low for keep in ("flash", "lite", "gemma-3-27b", "gemma-3-12b", "pro")):
+                discovered.append(short_name)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Dynamic model discovery skipped: %s", exc)
+    return discovered
+
 
 def _call_gemini_with_backoff(
     client: Any,
@@ -292,7 +383,7 @@ def _call_gemini_with_backoff(
     clients: Optional[List[Tuple[str, Any]]] = None,
     fallback_models: Optional[List[str]] = None,
 ) -> str:
-    """Execute Gemini request with immediate multi-key failover + model fallback + exponential backoff."""
+    """Execute Gemini request with immediate multi-key failover + separate-quota model fallback + exponential backoff."""
     global _ACTIVE_KEY_INDEX
     from google.genai.errors import APIError
 
@@ -308,6 +399,7 @@ def _call_gemini_with_backoff(
         ordered_clients = [("Key #1", client)]
 
     # Build candidate models list: primary model first, then any configured fallback models
+    allow_multi_model = bool(fallback_models)
     models_to_try: List[str] = [model]
     if fallback_models:
         for fm in fallback_models:
@@ -315,12 +407,17 @@ def _call_gemini_with_backoff(
             if fm_clean and fm_clean not in models_to_try:
                 models_to_try.append(fm_clean)
 
+    dead_models: set[str] = set()
+    discovered_once = False
     last_error: Optional[Exception] = None
     last_code: int = 500
     last_msg: str = ""
 
     for attempt in range(1, max_attempts + 1):
-        for candidate_model in models_to_try:
+        for candidate_model in list(models_to_try):
+            if candidate_model in dead_models and len(models_to_try) > len(dead_models):
+                continue
+
             for key_offset, (key_label, active_client) in enumerate(ordered_clients):
                 try:
                     logger.info(
@@ -345,16 +442,42 @@ def _call_gemini_with_backoff(
 
                 except APIError as err:
                     last_error = err
-                    code = getattr(err, "code", 500)
-                    msg = getattr(err, "message", str(err))
+                    code = int(getattr(err, "code", None) or 500)
+                    msg = str(getattr(err, "message", None) or str(err))
                     last_code = code
                     last_msg = msg
 
+                    # If a fallback model rejects response_schema / system_instruction with HTTP 400,
+                    # immediately try a schema-in-prompt JSON call on that same model.
+                    if code == 400 and allow_multi_model and "API_KEY" not in msg.upper():
+                        alt_text = _retry_without_strict_schema(
+                            active_client,
+                            candidate_model,
+                            contents,
+                            config,
+                        )
+                        if alt_text:
+                            if clients and len(clients) > 0:
+                                _ACTIVE_KEY_INDEX = (_ACTIVE_KEY_INDEX + key_offset) % len(clients)
+                            return alt_text
+
+                    # 404 = Model not available on this project/account -> skip model and try next fallback model!
+                    if code == 404 and len(models_to_try) > 1:
+                        dead_models.add(candidate_model)
+                        logger.warning(
+                            "Model '%s' is not available on %s (404). Switching immediately to next fallback model...",
+                            candidate_model,
+                            key_label,
+                        )
+                        break
+
                     # 429 = Quota/Rate Limit; 500, 502, 503, 504 = Server Error
                     is_transient = code in (429, 500, 502, 503, 504)
-                    is_key_issue = code in (400, 401, 403) and len(ordered_clients) > 1
+                    is_key_or_model_fallback = code in (400, 401, 403, 404) and (
+                        len(ordered_clients) > 1 or len(models_to_try) > 1
+                    )
 
-                    if is_transient or is_key_issue:
+                    if is_transient or is_key_or_model_fallback:
                         logger.warning(
                             "Gemini %s on %s / model '%s' (%s: %s). %s",
                             "quota/rate limit" if code == 429 else "error",
@@ -362,7 +485,7 @@ def _call_gemini_with_backoff(
                             candidate_model,
                             code,
                             msg[:120],
-                            "Switching to next API key / fallback model..."
+                            "Switching to next API key / separate-quota model..."
                             if (len(ordered_clients) > 1 or len(models_to_try) > 1)
                             else "Will retry after backoff...",
                         )
@@ -384,12 +507,29 @@ def _call_gemini_with_backoff(
                     )
                     continue
 
-        # All keys & fallback models failed on this attempt; sleep before next attempt
+        # If all static models hit 429/404 and multi-model fallback is enabled, dynamically query
+        # the account once for any additional vision models with unused quota buckets.
+        if allow_multi_model and not discovered_once and ordered_clients:
+            discovered_once = True
+            extra_models = _discover_available_vision_models(ordered_clients[0][1], models_to_try)
+            for em in extra_models:
+                if em not in models_to_try:
+                    models_to_try.append(em)
+
+        # All keys/models failed on this attempt; sleep before next attempt.
         if attempt < max_attempts:
             delay = base_delay * (2 ** (attempt - 1))
+            if base_delay >= 0.5 and last_code == 429 and last_msg:
+                import re
+
+                m = re.search(r"retry in (\d+(?:\.\d+)?)s", last_msg, re.IGNORECASE)
+                if m:
+                    suggested_wait = float(m.group(1)) + 1.0
+                    delay = max(delay, min(suggested_wait, 12.0))
             logger.warning(
-                "All %d configured API key(s) exhausted on attempt %d/%d. Retrying in %.2fs...",
+                "All %d configured API key(s) across %d model(s) rate-limited on attempt %d/%d. Waiting %.2fs before retry...",
                 len(ordered_clients),
+                len(models_to_try),
                 attempt,
                 max_attempts,
                 delay,
@@ -400,7 +540,9 @@ def _call_gemini_with_backoff(
         is_transient = last_code in (429, 500, 502, 503, 504)
         if is_transient:
             raise VLMTransientError(
-                f"Gemini API rate limit or server error across {len(ordered_clients)} key(s) ({last_code}): {last_msg}",
+                f"All {len(ordered_clients)} configured Gemini API key(s) reached their Google free-tier quota (HTTP {last_code}). "
+                "Note: API keys created inside the SAME Google Cloud project share the same daily quota bucket — "
+                "in Google AI Studio, click 'Create API key in new project' and add it via 'API Keys' in the top bar.",
                 status_code=last_code,
             ) from last_error
         raise VLMPermanentError(
@@ -423,7 +565,7 @@ def diagnose_capture(
     user_notes: Optional[str] = None,
     settings: Optional[Settings] = None,
 ) -> DiagnosisResult:
-    """Diagnose a capture session and return structured :class:`DiagnosisResult`."""
+    """Diagnose a capture session using live Gemini vision and return structured :class:`DiagnosisResult`."""
     config = settings or get_settings()
 
     # 1. Use offline mock ONLY when explicitly enabled via USE_MOCK_VLM=true.
@@ -497,47 +639,31 @@ def diagnose_capture(
         max_output_tokens=config.gemini_max_output_tokens,
     )
 
-    fallback_models = [
+    configured_fallbacks = [
         m.strip()
         for m in (getattr(config, "gemini_fallback_models", "") or "").split(",")
-        if m.strip() and "2.5" not in m
+        if m.strip()
     ]
+    fallback_models: List[str] = []
+    for candidate in [*configured_fallbacks, *DEFAULT_SEPARATE_QUOTA_MODELS]:
+        if candidate and candidate not in fallback_models and candidate != config.gemini_model:
+            fallback_models.append(candidate)
 
-    # 5. Call API with multi-key rotation and backoff retries
-    try:
-        raw_json = _call_gemini_with_backoff(
-            client=clients[0][1],
-            model=config.gemini_model,
-            contents=contents,
-            config=gen_config,
-            settings=config,
-            clients=clients,
-            fallback_models=fallback_models,
-        )
-    except VLMTransientError as err:
-        if getattr(config, "fallback_to_mock_on_quota", True) and err.status_code == 429:
-            logger.warning(
-                "All %d configured Gemini API key(s) reached HTTP 429 quota limit; "
-                "falling back to deterministic diagnosis so Stage 2/3 can proceed.",
-                len(clients),
-            )
-            fallback_diag = mock_diagnosis(session)
-            return fallback_diag.model_copy(
-                update={
-                    "notes": (
-                        f"[Quota Notice: All {len(clients)} configured Gemini API key(s) "
-                        "hit the free-tier HTTP 429 rate/quota limit on gemini-3.8-flash. "
-                        "Add GEMINI_API_KEY_2..5 in .env for fresh quota. Using fallback "
-                        f"measurements so you can verify and generate CAD.] {fallback_diag.notes}"
-                    ),
-                    "requires_manual_confirmation": True,
-                }
-            )
-        raise
+    # 5. Call live Gemini API with multi-key rotation and separate-quota model failover (NEVER returns mock data)
+    raw_json = _call_gemini_with_backoff(
+        client=clients[0][1],
+        model=config.gemini_model,
+        contents=contents,
+        config=gen_config,
+        settings=config,
+        clients=clients,
+        fallback_models=fallback_models,
+    )
 
     # 6. Parse and validate with Pydantic
+    cleaned_json = _extract_json_payload(raw_json)
     try:
-        diagnosis = DiagnosisResult.model_validate_json(raw_json)
+        diagnosis = DiagnosisResult.model_validate_json(cleaned_json)
     except Exception as exc:
         logger.error("Failed to parse Gemini JSON output: %s\nRaw output was: %s", exc, raw_json)
         raise VLMPermanentError(

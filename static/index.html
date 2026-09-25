@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ReForm3D — Parametric 3D Repair Pipeline</title>
+  <title>ReForm — Repair Intelligence &amp; 3D Adaptation Studio</title>
   <link rel="stylesheet" href="/static/styles.css" />
   <script type="importmap">
     {
@@ -15,284 +15,490 @@
   </script>
 </head>
 <body>
-  <header class="app-header">
-    <div class="header-inner">
-      <div class="brand">
-        <span class="brand-badge">ReForm3D</span>
-        <div>
-          <h1>Repair &amp; Adaptive Attachment Pipeline</h1>
-          <p class="brand-subtitle">Guided Capture &rarr; Safe Enhancement &rarr; Gemini VLM Diagnosis &rarr; Deterministic CadQuery CAD</p>
-        </div>
-      </div>
-      <div class="status-pills">
-        <span id="pill-session" class="pill">Session: Starting...</span>
-        <span id="pill-vlm" class="pill">VLM: Checking...</span>
-        <span id="pill-enhancement" class="pill">Stage 1.5: Checking...</span>
+  <!-- Ambient Pastel Mesh Blobs (from teammate's App.js) -->
+  <div class="ambient-mesh" aria-hidden="true">
+    <div class="blob-1"></div>
+    <div class="blob-2"></div>
+    <div class="blob-3"></div>
+  </div>
+
+  <!-- Fixed Site Header (from teammate's Nav.jsx) -->
+  <header class="site-header">
+    <div class="site-header-inner">
+      <a id="nav-brand-home" class="brand-lockup">
+        <svg width="28" height="28" viewBox="0 0 32 32" fill="none">
+          <rect x="3" y="3" width="26" height="26" rx="6" stroke="#0A0E12" stroke-width="2.4" />
+          <circle cx="16" cy="16" r="6" stroke="#3157CC" stroke-width="2.4" />
+          <path d="M16 4v5M16 23v5M4 16h5M23 16h5" stroke="#0A0E12" stroke-width="2" />
+        </svg>
+        <span class="brand-name font-display">ReForm</span>
+        <span class="brand-divider"></span>
+        <span class="brand-descriptor mono-label">Repair intelligence</span>
+      </a>
+
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <button id="btn-open-keys-modal" type="button" class="btn-reform-secondary" style="padding: 0.55rem 0.95rem; font-size: 11px;">
+          API Keys (<span id="key-count-badge">1</span>/5)
+        </button>
+        <button id="btn-nav-start" type="button" class="nav-cta">
+          Start an adaptation <span>&nearr;</span>
+        </button>
       </div>
     </div>
   </header>
 
-  <main class="container">
-    <!-- Stage Navigation -->
-    <nav class="stage-nav" aria-label="Pipeline stages">
-      <button type="button" class="stage-tab active" data-stage="1">
-        <span class="step-num">Stage 1</span>
-        <span class="step-label">Guided Capture &amp; Scale BBox</span>
-      </button>
-      <button type="button" class="stage-tab" data-stage="1.5">
-        <span class="step-num">Stage 1.5</span>
-        <span class="step-label">Safe Enhancement Preview</span>
-      </button>
-      <button type="button" class="stage-tab" data-stage="2">
-        <span class="step-num">Stage 2</span>
-        <span class="step-label">Diagnosis &amp; Confirmation</span>
-      </button>
-      <button type="button" class="stage-tab" data-stage="3">
-        <span class="step-num">Stage 3 + 4</span>
-        <span class="step-label">3D CAD Preview &amp; Export</span>
-      </button>
-    </nav>
+  <!-- 5-Key Failover Modal -->
+  <div id="modal-api-keys" class="hidden" style="position: fixed; inset: 0; z-index: 100; background: rgba(10,14,18,0.55); backdrop-filter: blur(6px); display: flex; align-items: center; justify-content: center; padding: 1rem;">
+    <div class="studio-card" style="max-width: 540px; width: 100%; background: #ffffff;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+        <h3 class="font-display" style="margin: 0; font-size: 1.25rem; font-weight: 900; text-transform: uppercase;">
+          Gemini API Keys (Up to 5 Failover Keys)
+        </h3>
+        <button id="btn-close-keys-modal" type="button" class="btn-reform-secondary" style="padding: 4px 10px;">&times;</button>
+      </div>
+      <p style="font-size: 0.85rem; color: var(--muted); margin: 0 0 1rem;">
+        Google's free tier allows 20 requests/day per key on <code>gemini-3.8-flash</code>. Add up to 5 keys below — if Key #1 reaches its quota limit, ReForm automatically switches to Key #2 &rarr; #3 &rarr; #4 &rarr; #5 and saves them to <code>.env</code>.
+      </p>
+      <div style="display: flex; flex-direction: column; gap: 0.6rem; margin-bottom: 1.25rem;">
+        <input id="key-slot-1" type="text" placeholder="Key #1 (Primary GEMINI_API_KEY)" class="reform-input" style="font-family: 'IBM Plex Mono', monospace; font-size: 12px;" />
+        <input id="key-slot-2" type="text" placeholder="Key #2 (Backup GEMINI_API_KEY_2)" class="reform-input" style="font-family: 'IBM Plex Mono', monospace; font-size: 12px;" />
+        <input id="key-slot-3" type="text" placeholder="Key #3 (Backup GEMINI_API_KEY_3)" class="reform-input" style="font-family: 'IBM Plex Mono', monospace; font-size: 12px;" />
+        <input id="key-slot-4" type="text" placeholder="Key #4 (Backup GEMINI_API_KEY_4)" class="reform-input" style="font-family: 'IBM Plex Mono', monospace; font-size: 12px;" />
+        <input id="key-slot-5" type="text" placeholder="Key #5 (Backup GEMINI_API_KEY_5)" class="reform-input" style="font-family: 'IBM Plex Mono', monospace; font-size: 12px;" />
+      </div>
+      <div style="display: flex; justify-content: flex-end; gap: 0.65rem;">
+        <button id="btn-cancel-keys" type="button" class="btn-reform-secondary">Cancel</button>
+        <button id="btn-save-keys" type="button" class="btn-reform-primary" style="padding: 0.65rem 1.35rem;">Save Active Keys</button>
+      </div>
+    </div>
+  </div>
 
-    <div id="global-alert" class="alert-banner hidden" role="alert"></div>
+  <!-- =========================================================================
+       VIEW 1: LANDING PAGE (Hero + 3D Showcase + Marquee + Pipeline + CTA)
+       ========================================================================= -->
+  <div id="view-landing">
+    <section class="hero-section vgrid" id="hero-root">
+      <!-- Rotating SVG Rings (from teammate's Hero.jsx) -->
+      <div class="bg-rings" aria-hidden="true">
+        <svg class="spin-slow" width="760" height="760" viewBox="0 0 880 880" fill="none">
+          <circle cx="440" cy="440" r="130" stroke="#B4E4E6" stroke-opacity="0.45" stroke-width="2" />
+          <circle cx="440" cy="440" r="230" stroke="#C9C1F1" stroke-opacity="0.35" stroke-width="2" />
+          <circle cx="440" cy="440" r="330" stroke="#B8E3D1" stroke-opacity="0.45" stroke-dasharray="4 12" stroke-width="2" />
+          <circle cx="440" cy="440" r="428" stroke="#A2B9EE" stroke-opacity="0.35" stroke-width="1.5" />
+          <path d="M440 12v60M440 808v60M12 440h60M808 440h60" stroke="#B4E4E6" stroke-opacity="0.45" stroke-width="2" />
+        </svg>
+      </div>
 
-    <!-- ===================== STAGE 1: GUIDED CAPTURE ===================== -->
-    <section id="panel-stage-1" class="card">
-      <div class="card-header">
+      <div class="hero-grid">
         <div>
-          <h2>Stage 1 — Guided Multi-Angle Capture &amp; Scale Calibration</h2>
-          <p>Capture 3 required angles (`straight_on`, `angled`, `mating_surface`) with a known physical scale reference held flat against the part.</p>
+          <div class="hero-eyebrow">
+            <span class="hero-eyebrow-line" id="hero-accent-line"></span>
+            <span class="mono-label" id="hero-eyebrow-text">STAGE 01 / PHOTOGRAPH</span>
+          </div>
+
+          <h1 class="hero-headline font-display" id="hero-headline-text">
+            SNAP THREE PHOTOS.<br />REBUILD THE PART.
+          </h1>
+
+          <p class="hero-blurb" id="hero-blurb-text">
+            Turn any broken household knob, shaft, clip, or handle into a custom-fitted, 3D-printable replacement part using just your phone camera and a coin for scale.
+          </p>
+
+          <div class="hero-spec-row">
+            <div class="hero-spec-col">
+              <div class="mono-label hero-spec-key" id="spec-k-0">INPUT</div>
+              <div class="hero-spec-val" id="spec-v-0">3 PHONE PHOTOS</div>
+            </div>
+            <div class="hero-spec-col">
+              <div class="mono-label hero-spec-key" id="spec-k-1">CALIBRATION</div>
+              <div class="hero-spec-val" id="spec-v-1">COIN / CARD</div>
+            </div>
+            <div class="hero-spec-col">
+              <div class="mono-label hero-spec-key" id="spec-k-2">OUTPUT</div>
+              <div class="hero-spec-val" id="spec-v-2">WATERTIGHT STL</div>
+            </div>
+          </div>
+
+          <div style="margin-top: 2rem; display: flex; flex-wrap: wrap; gap: 0.85rem;">
+            <button id="btn-hero-start" type="button" class="btn-reform-primary">
+              Start Your Repair &rarr;
+            </button>
+            <a href="#pipeline" class="btn-reform-secondary">
+              How It Works &darr;
+            </a>
+          </div>
         </div>
-        <button id="btn-demo-populate" type="button" class="btn btn-secondary" title="Generate 3 synthetic test photos + reference bbox for instant desktop testing">
-          Auto-Fill 3 Demo Photos
+
+        <div class="hero-visual-box">
+          <div id="hero-3d-canvas"></div>
+          <div class="viewer-hud viewer-hud-top">
+            <span><span class="live-dot"></span>INTERACTIVE 3D PREVIEW</span>
+            <span id="hero-stage-counter">01 / 04</span>
+          </div>
+          <div class="viewer-hud viewer-hud-bottom">
+            <span>+ DRAG TO ROTATE</span>
+            <span>&bull;</span>
+            <span>SCROLL TO ZOOM</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 4-Stage Interactive Dock (from teammate's Hero.jsx) -->
+      <div class="stage-dock">
+        <div class="stage-dock-grid">
+          <button type="button" class="stage-choice active" data-hero-stage="0">
+            <div class="mono-label" style="font-size: 9px; color: var(--label);">01</div>
+            <div class="font-display" style="font-weight: 800; font-size: 15px; text-transform: uppercase; margin-top: 4px;">Broken Object</div>
+            <div style="font-size: 11px; color: var(--label); margin-top: 2px;">3 guided photos + scale coin</div>
+          </button>
+          <button type="button" class="stage-choice" data-hero-stage="1">
+            <div class="mono-label" style="font-size: 9px; color: var(--label);">02</div>
+            <div class="font-display" style="font-weight: 800; font-size: 15px; text-transform: uppercase; margin-top: 4px;">Smart Isolation</div>
+            <div style="font-size: 11px; color: var(--label); margin-top: 2px;">Lighting &amp; background cleanup</div>
+          </button>
+          <button type="button" class="stage-choice" data-hero-stage="2">
+            <div class="mono-label" style="font-size: 9px; color: var(--label);">03</div>
+            <div class="font-display" style="font-weight: 800; font-size: 15px; text-transform: uppercase; margin-top: 4px;">AI Measurement</div>
+            <div style="font-size: 11px; color: var(--label); margin-top: 2px;">Calibrated millimeter extraction</div>
+          </button>
+          <button type="button" class="stage-choice" data-hero-stage="3">
+            <div class="mono-label" style="font-size: 9px; color: var(--label);">04</div>
+            <div class="font-display" style="font-weight: 800; font-size: 15px; text-transform: uppercase; margin-top: 4px;">3D Print File</div>
+            <div style="font-size: 11px; color: var(--label); margin-top: 2px;">Ready-to-slice STL &amp; STEP</div>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Marquee Banner -->
+    <div class="marquee-bar">
+      <div class="marquee-inner">
+        &nbsp;&bull;&nbsp; FRICTION-FIT COLLAR &nbsp;&bull;&nbsp; SNAP-CLIP BRACKET &nbsp;&bull;&nbsp; TORQUE LEVER CAP &nbsp;&bull;&nbsp; DUAL-WING TWIST ADAPTER &nbsp;&bull;&nbsp; MILLIMETER SCALE CALIBRATION &nbsp;&bull;&nbsp; WATERTIGHT STL &amp; STEP EXPORT &nbsp;&bull;&nbsp;
+      </div>
+    </div>
+
+    <!-- Pipeline Section (from teammate's Pipeline.jsx) -->
+    <section id="pipeline" class="pipeline-section">
+      <div style="margin-bottom: 3rem;">
+        <span class="mono-label" style="font-size: 11px; color: #087f9f;">WORKFLOW</span>
+        <h2 class="font-display" style="font-size: clamp(2rem, 3.6vw, 3.2rem); font-weight: 900; text-transform: uppercase; margin: 0.5rem 0 0; line-height: 0.96;">
+          From broken part to<br />custom 3D replacement
+        </h2>
+      </div>
+
+      <div>
+        <div class="process-row">
+          <span class="mono-label" style="color: var(--label); font-size: 12px;">01</span>
+          <h3 class="font-display" style="font-size: 1.75rem; font-weight: 900; text-transform: uppercase; margin: 0;">Photograph</h3>
+          <p style="margin: 0; color: var(--muted); font-size: 0.95rem;">Take or upload three angles of the broken part alongside a coin, card, or ruler for automatic millimeter scaling.</p>
+        </div>
+        <div class="process-row">
+          <span class="mono-label" style="color: var(--label); font-size: 12px;">02</span>
+          <h3 class="font-display" style="font-size: 1.75rem; font-weight: 900; text-transform: uppercase; margin: 0;">Identify &amp; Measure</h3>
+          <p style="margin: 0; color: var(--muted); font-size: 0.95rem;">Our vision system cleans up background clutter, identifies the failure mode, and estimates key dimensions in millimeters.</p>
+        </div>
+        <div class="process-row">
+          <span class="mono-label" style="color: var(--label); font-size: 12px;">03</span>
+          <h3 class="font-display" style="font-size: 1.75rem; font-weight: 900; text-transform: uppercase; margin: 0;">Review &amp; Customize</h3>
+          <p style="margin: 0; color: var(--muted); font-size: 0.95rem;">Fine-tune any dimension or choose your preferred attachment style before generating the solid geometry.</p>
+        </div>
+        <div class="process-row">
+          <span class="mono-label" style="color: var(--label); font-size: 12px;">04</span>
+          <h3 class="font-display" style="font-size: 1.75rem; font-weight: 900; text-transform: uppercase; margin: 0;">Print &amp; Fit</h3>
+          <p style="margin: 0; color: var(--muted); font-size: 0.95rem;">Inspect the 3D part right in your browser and download the verified STL or STEP file for your 3D printer.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- CTA Card (from teammate's CTA.jsx) -->
+    <section class="cta-section">
+      <div class="cta-card">
+        <span class="mono-label" style="font-size: 11px; color: var(--label);">READY TO BEGIN?</span>
+        <h2 class="font-display" style="font-size: clamp(1.8rem, 3vw, 2.75rem); font-weight: 900; text-transform: uppercase; margin: 0.6rem 0 1rem;">
+          Create your custom repair part in minutes
+        </h2>
+        <p style="color: var(--muted); max-width: 520px; margin: 0 auto 1.75rem;">
+          Upload 3 photos from your device or try our built-in sample to generate a printable 3D adapter immediately.
+        </p>
+        <button id="btn-cta-start" type="button" class="btn-reform-primary">
+          Launch Repair Studio &rarr;
+        </button>
+      </div>
+    </section>
+  </div>
+
+  <!-- =========================================================================
+       VIEW 2: 3-STEP REPAIR STUDIO (Teammate's PhotoEntryPage.jsx + Full Features)
+       ========================================================================= -->
+  <section id="view-workflow" class="workflow-section hidden">
+    <button id="btn-back-home" type="button" class="back-btn">
+      <span>&larr;</span> BACK TO HOME
+    </button>
+
+    <!-- 3-Step Stepper (1. Capture -> 2. Review & Customize -> 3. 3D Result) -->
+    <div class="stepper-row">
+      <div id="stepper-1" class="stepper-item active">
+        <div class="stepper-circle">1</div>
+        <span class="stepper-title">Capture</span>
+      </div>
+      <div class="stepper-line"></div>
+      <div id="stepper-2" class="stepper-item">
+        <div class="stepper-circle">2</div>
+        <span class="stepper-title">Review &amp; Customize</span>
+      </div>
+      <div class="stepper-line"></div>
+      <div id="stepper-3" class="stepper-item">
+        <div class="stepper-circle">3</div>
+        <span class="stepper-title">3D Result</span>
+      </div>
+    </div>
+
+    <div id="studio-toast" class="notice-toast hidden" role="status"></div>
+
+    <!-- ==================== STEP 1: CAPTURE OBJECT ==================== -->
+    <div id="step-panel-1" class="studio-card">
+      <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 1rem;">
+        <div>
+          <h2 class="studio-title">Step 1: Capture Your Object</h2>
+          <p class="studio-subtitle">
+            Upload or take three clear photos of the part you want to repair or adapt, with a scale object placed flat beside it.
+          </p>
+        </div>
+        <button id="btn-load-sample" type="button" class="btn-reform-secondary" title="Load sample photos to test the full flow immediately">
+          Load Sample Photos
         </button>
       </div>
 
-      <!-- 1A. Reference Selector -->
-      <div>
-        <label>1. Choose Scale Reference Object (Required)</label>
-        <div id="reference-options" class="ref-options"></div>
-        <div id="custom-dimension-wrap" class="hidden" style="max-width: 320px; margin-bottom: 1rem;">
-          <label for="input-custom-dimension">Known Reference Dimension (mm)</label>
-          <input id="input-custom-dimension" type="number" step="0.1" min="1" value="25.0" />
+      <!-- Scale Reference Picker -->
+      <div style="margin-bottom: 1.5rem;">
+        <span class="mono-label" style="font-size: 10px; color: var(--label); display: block; margin-bottom: 0.5rem;">
+          1. SELECT YOUR SCALE REFERENCE OBJECT
+        </span>
+        <div id="reference-cards-container" class="ref-pill-grid"></div>
+        <div id="custom-size-row" class="hidden" style="max-width: 260px;">
+          <label class="mono-label" style="font-size: 10px; color: var(--muted);">Known Size (mm)</label>
+          <input id="input-custom-mm" type="number" step="0.1" min="1" value="25.0" class="reform-input" />
         </div>
       </div>
 
-      <!-- 1B. Shot Selector & Instructions -->
-      <div style="margin-top: 1rem;">
-        <label>2. Select Required Camera Slot</label>
-        <div id="shot-selector" class="shot-selector">
-          <button type="button" class="shot-btn active" data-shot="straight_on">
-            <span>(a) Straight-On</span>
-            <span class="shot-status" id="status-straight_on">Pending</span>
-          </button>
-          <button type="button" class="shot-btn" data-shot="angled">
-            <span>(b) Angled (45–90&deg;)</span>
-            <span class="shot-status" id="status-angled">Pending</span>
-          </button>
-          <button type="button" class="shot-btn" data-shot="mating_surface">
-            <span>(c) Mating Surface + Ref</span>
-            <span class="shot-status" id="status-mating_surface">Pending</span>
-          </button>
-        </div>
-
-        <div id="shot-guidance" class="guidance-banner">
-          <h3 id="guidance-title">Straight-on shot</h3>
-          <p id="guidance-body">Point the camera directly at the broken part, square to it. Use even lighting and a plain background.</p>
-          <p id="guidance-tip" style="color: var(--text-muted); font-size: 0.82rem;"></p>
-        </div>
-      </div>
-
-      <!-- 1C. Camera Input & BBox Canvas -->
-      <div class="grid-2">
-        <div>
-          <label for="input-photo-file">3. Capture or Upload Photo for Current Slot</label>
-          <input
-            id="input-photo-file"
-            type="file"
-            accept="image/*"
-            style="margin-bottom: 0.75rem;"
-          />
-          <p style="font-size: 0.82rem; color: var(--text-muted); margin-top: 0;">
-            <strong>Bounding-Box Marking:</strong> Drag on the image canvas to mark the bounding box around your scale reference object (`[x_min, y_min, x_max, y_max]`).
-          </p>
-          <div class="btn-row">
-            <button id="btn-clear-bbox" type="button" class="btn btn-secondary">Clear / Redraw Box</button>
-            <span id="bbox-readout" class="pill">BBox: Not marked</span>
-          </div>
-
-          <div class="btn-row" style="margin-top: 1rem;">
-            <button id="btn-check-quality" type="button" class="btn btn-secondary" disabled>
-              Run Quality Check
-            </button>
-            <button id="btn-save-capture" type="button" class="btn btn-primary" disabled>
-              Save Shot to Session
-            </button>
-          </div>
-
-          <!-- Pre-Enhancement Quality Verdict Box -->
-          <div id="quality-verdict-box" class="verdict-box hidden">
-            <strong id="verdict-title">Quality Verdict</strong>
-            <div id="verdict-metrics" class="metrics-row"></div>
-            <ul id="verdict-warnings" style="margin: 0.5rem 0; padding-left: 1.2rem; font-size: 0.86rem;"></ul>
-            <div id="verdict-override-actions" class="btn-row hidden">
-              <button id="btn-retake-photo" type="button" class="btn btn-secondary">Retake Photo</button>
-              <button id="btn-use-anyway" type="button" class="btn btn-warning">Use Anyway (Override)</button>
+      <!-- 3 Photo Upload Slots (Front, Angled, Close-up with Reference) -->
+      <span class="mono-label" style="font-size: 10px; color: var(--label); display: block; margin-bottom: 0.5rem;">
+        2. UPLOAD OR TAKE 3 PHOTOS (TAP ANY CARD TO CHOOSE FROM GALLERY OR CAMERA)
+      </span>
+      <div class="photo-slots-grid">
+        <!-- Slot 1: straight_on -->
+        <div class="photo-slot-card">
+          <span class="mono-label" style="font-size: 10px; color: var(--label); margin-bottom: 6px;">Front View</span>
+          <div id="dropzone-straight_on" class="photo-dropzone">
+            <img id="preview-straight_on" class="hidden" alt="Front view" />
+            <div id="empty-straight_on" style="text-align: center; padding: 1rem;">
+              <div style="font-size: 1.8rem; margin-bottom: 4px;">&#128247;</div>
+              <div style="font-size: 0.85rem; color: var(--muted); font-weight: 600;">Choose or take photo</div>
+              <div style="font-size: 0.74rem; color: var(--label);">Straight-on view of part</div>
             </div>
+            <span id="badge-straight_on" class="slot-badge hidden">Ready &#10003;</span>
+            <input type="file" accept="image/*" data-slot="straight_on" class="slot-file-input" />
           </div>
         </div>
 
-        <div>
-          <label>Interactive Photo &amp; Reference Bounding-Box Canvas</label>
-          <div class="canvas-wrapper">
-            <canvas id="bbox-canvas" class="hidden"></canvas>
-            <div id="canvas-placeholder" class="canvas-placeholder">
-              Select or capture a photo to preview and drag a bounding box over your reference object.
+        <!-- Slot 2: angled -->
+        <div class="photo-slot-card">
+          <span class="mono-label" style="font-size: 10px; color: var(--label); margin-bottom: 6px;">Side / Angled View</span>
+          <div id="dropzone-angled" class="photo-dropzone">
+            <img id="preview-angled" class="hidden" alt="Angled view" />
+            <div id="empty-angled" style="text-align: center; padding: 1rem;">
+              <div style="font-size: 1.8rem; margin-bottom: 4px;">&#128247;</div>
+              <div style="font-size: 0.85rem; color: var(--muted); font-weight: 600;">Choose or take photo</div>
+              <div style="font-size: 0.74rem; color: var(--label);">45&deg;–90&deg; perspective</div>
             </div>
+            <span id="badge-angled" class="slot-badge hidden">Ready &#10003;</span>
+            <input type="file" accept="image/*" data-slot="angled" class="slot-file-input" />
+          </div>
+        </div>
+
+        <!-- Slot 3: mating_surface -->
+        <div class="photo-slot-card">
+          <span class="mono-label" style="font-size: 10px; color: var(--label); margin-bottom: 6px;">Close-Up + Scale Object</span>
+          <div id="dropzone-mating_surface" class="photo-dropzone">
+            <img id="preview-mating_surface" class="hidden" alt="Close-up with scale" />
+            <div id="empty-mating_surface" style="text-align: center; padding: 1rem;">
+              <div style="font-size: 1.8rem; margin-bottom: 4px;">&#128247;</div>
+              <div style="font-size: 0.85rem; color: var(--muted); font-weight: 600;">Choose or take photo</div>
+              <div style="font-size: 0.74rem; color: var(--label);">Include coin/card flat by part</div>
+            </div>
+            <span id="badge-mating_surface" class="slot-badge hidden">Ready &#10003;</span>
+            <input type="file" accept="image/*" data-slot="mating_surface" class="slot-file-input" />
           </div>
         </div>
       </div>
 
-      <!-- Session Readiness Footer -->
-      <div style="margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--border); display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 1rem;">
-        <div>
-          <strong id="readiness-label">Session Status: Waiting for 3 photos + marked reference box</strong>
-        </div>
-        <div class="btn-row" style="margin-top: 0;">
-          <button id="btn-proceed-enhance" type="button" class="btn btn-primary" disabled>
-            Proceed to Stage 1.5 Enhancement &rarr;
-          </button>
-        </div>
-      </div>
-    </section>
-
-    <!-- ===================== STAGE 1.5: ENHANCEMENT PREVIEW ===================== -->
-    <section id="panel-stage-1.5" class="card hidden">
-      <div class="card-header">
-        <div>
-          <h2>Stage 1.5 — Deterministic Image Enhancement &amp; Reference Retention Gate</h2>
-          <p>CLAHE exposure normalization and rembg background segmentation. If background removal clips the user-marked reference box, ReForm3D automatically falls back to the unenhanced image.</p>
-        </div>
-        <div class="btn-row" style="margin-top: 0;">
-          <button id="btn-run-enhance" type="button" class="btn btn-secondary">Re-Run Enhancement</button>
-          <button id="btn-proceed-diagnose" type="button" class="btn btn-primary">
-            Run Stage 2 VLM Diagnosis &rarr;
-          </button>
-        </div>
-      </div>
-
-      <div id="enhancement-messages"></div>
-      <div id="enhancement-grid" class="grid-3"></div>
-    </section>
-
-    <!-- ===================== STAGE 2: VLM DIAGNOSIS & CONFIRMATION ===================== -->
-    <section id="panel-stage-2" class="card hidden">
-      <div class="card-header">
-        <div>
-          <h2>Stage 2 — Gemini VLM Diagnosis &amp; Human-in-the-Loop Measurement Gate</h2>
-          <p>Review the VLM diagnosis and verify every parameter before CadQuery generates geometry. Low-confidence or mismatched measurements are blocked until explicitly confirmed.</p>
-        </div>
-        <button id="btn-rerun-diagnose" type="button" class="btn btn-secondary">Re-Run VLM Diagnosis</button>
-      </div>
-
-      <div class="grid-2">
-        <!-- Left column: VLM Diagnosis Summary -->
-        <div>
-          <div class="verdict-box" style="margin-top: 0;">
-            <h3 style="margin-top: 0; font-size: 1rem;">VLM Diagnosis Report</h3>
-            <p style="margin: 0.35rem 0;"><strong>Object Identified:</strong> <span id="diag-object">—</span></p>
-            <p style="margin: 0.35rem 0;"><strong>Interaction Primitive:</strong> <span id="diag-primitive" class="pill">—</span></p>
-            <p style="margin: 0.35rem 0;"><strong>Failure Diagnosis:</strong> <span id="diag-failure">—</span></p>
-            <p style="margin: 0.35rem 0;"><strong>VLM Notes:</strong> <span id="diag-notes" style="color: var(--text-muted);">—</span></p>
-          </div>
-
-          <div style="margin-top: 1rem;">
-            <label for="select-template">Parametric Attachment Archetype (`suggested_template`)</label>
-            <select id="select-template">
-              <option value="friction_fit_collar">friction_fit_collar (Cylindrical collar / shaft sleeve)</option>
-              <option value="snap_clip_bracket">snap_clip_bracket (Flexible C-clip bracket)</option>
-              <option value="lever_cap">lever_cap (Slip-on cap with torque lever)</option>
-              <option value="wing_adapter">wing_adapter (Dual-wing butterfly twist adapter)</option>
-              <option value="other">other (Unsupported — will block CAD generation)</option>
-            </select>
-          </div>
-
-          <div style="margin-top: 1rem;">
-            <label for="input-clearance">Safety Mating Clearance (`clearance_mm`)</label>
-            <input id="input-clearance" type="number" step="0.05" min="0.05" max="0.60" value="0.20" />
-            <span style="font-size: 0.78rem; color: var(--text-muted);">Added automatically to inner bores/channels so the printed part slides on without binding.</span>
-          </div>
-
-          <div id="validation-gate-banner" class="alert-banner warn" style="margin-top: 1rem;">
-            Awaiting measurement review.
-          </div>
-        </div>
-
-        <!-- Right column: Editable Per-Template Measurements & Confirmation Gate -->
-        <div>
-          <label>Editable Template Measurements (mm)</label>
-          <div id="measurements-editor"></div>
-
-          <div class="verdict-box" style="margin-top: 1rem;">
-            <label style="display: flex; align-items: center; gap: 0.6rem; cursor: pointer; margin: 0;">
-              <input id="checkbox-user-confirmed" type="checkbox" style="width: 18px; height: 18px;" />
-              <span><strong>I have verified and confirmed these measurements (`user_confirmed = true`)</strong></span>
-            </label>
-            <p style="margin: 0.4rem 0 0; font-size: 0.8rem; color: var(--text-muted);">
-              Unchecked (`user_confirmed = false`) requests with any low-confidence measurement will be rejected by <code>POST /api/generate-cad</code> with HTTP 400.
+      <!-- Reference Object Bounding-Box Marker (Appears automatically when close-up photo is chosen) -->
+      <div id="bbox-drawer-section" class="bbox-drawer-card hidden">
+        <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 0.75rem;">
+          <div>
+            <strong style="font-size: 0.95rem;">Mark Your Scale Reference Object</strong>
+            <p style="margin: 2px 0 0; font-size: 0.82rem; color: var(--muted);">
+              Drag a box around your coin, card, or ruler on the photo below so ReForm can calibrate exact millimeters.
             </p>
           </div>
+          <button id="btn-reset-bbox" type="button" class="btn-reform-secondary" style="padding: 0.45rem 0.9rem; font-size: 0.72rem;">
+            Redraw Box
+          </button>
+        </div>
+        <div class="canvas-stage">
+          <canvas id="bbox-canvas"></canvas>
+        </div>
+      </div>
 
-          <div class="btn-row">
-            <button id="btn-generate-cad" type="button" class="btn btn-primary">
-              Generate Watertight 3D CAD (STL + STEP) &rarr;
-            </button>
+      <div style="margin-top: 2rem; display: flex; justify-content: flex-end; align-items: center; gap: 1rem;">
+        <button id="btn-continue-step2" type="button" class="btn-reform-primary" disabled>
+          Analyze &amp; Measure Part &rarr;
+        </button>
+      </div>
+    </div>
+
+    <!-- ==================== STEP 2: REVIEW & CUSTOMIZE ==================== -->
+    <div id="step-panel-2" class="studio-card hidden">
+      <!-- Loading State while Stage 1.5 + Stage 2 runs -->
+      <div id="step2-loading" class="hidden" style="text-align: center; padding: 3rem 1rem;">
+        <h2 class="studio-title">Analyzing Your Photos...</h2>
+        <p class="studio-subtitle" style="max-width: 480px; margin: 0.5rem auto 2rem;">
+          Enhancing lighting, isolating the part, and calculating millimeter dimensions from your reference object.
+        </p>
+        <div style="display: inline-block; padding: 0.75rem 1.5rem; border-radius: 99px; background: #ffffff; border: 1px solid var(--line); font-family: 'IBM Plex Mono', monospace; font-size: 12px;">
+          EXTRACTING PARAMETRIC GEOMETRY...
+        </div>
+      </div>
+
+      <!-- Review & Customize Content -->
+      <div id="step2-content">
+        <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 1rem; margin-bottom: 1.5rem;">
+          <div>
+            <h2 class="studio-title">Step 2: Review &amp; Customize Measurements</h2>
+            <p class="studio-subtitle" style="margin-bottom: 0;">
+              We identified your part and extracted the dimensions below. You can adjust any measurement before generating your 3D model.
+            </p>
           </div>
+          <button id="btn-back-step1" type="button" class="btn-reform-secondary">
+            &larr; Change Photos
+          </button>
         </div>
-      </div>
-    </section>
 
-    <!-- ===================== STAGE 3 + 4: 3D CAD PREVIEW & EXPORT ===================== -->
-    <section id="panel-stage-3" class="card hidden">
-      <div class="card-header">
-        <div>
-          <h2>Stage 3 — Watertight CadQuery Solid &amp; Three.js STL Inspection</h2>
-          <p>Verified single-body watertight solid with post-export Trimesh validation and mating clearance applied.</p>
-        </div>
-        <div class="btn-row" style="margin-top: 0;">
-          <a id="link-download-stl" href="#" download class="btn btn-success">Download STL</a>
-          <a id="link-download-step" href="#" download class="btn btn-secondary">Download STEP</a>
-          <button id="btn-stage4-stub" type="button" class="btn btn-secondary">Run Stage 4 Slicer Stub</button>
-        </div>
-      </div>
+        <div class="review-grid">
+          <!-- Left Column: Identified Part + Attachment Style + Cleaned Photo Preview -->
+          <div style="display: flex; flex-direction: column; gap: 1.25rem;">
+            <div class="white-panel">
+              <span class="mono-label" style="font-size: 10px; color: var(--label);">DIAGNOSIS SUMMARY</span>
+              <h3 id="summary-object-title" style="margin: 0.35rem 0; font-size: 1.2rem; font-weight: 800;">Broken Part</h3>
+              <p id="summary-failure-text" style="margin: 0.25rem 0 0.75rem; color: var(--muted); font-size: 0.9rem;"></p>
+              <p id="summary-guidance-text" style="margin: 0; font-size: 0.82rem; color: var(--label); border-top: 1px solid var(--line); padding-top: 0.65rem;"></p>
+            </div>
 
-      <div class="grid-2">
-        <div>
-          <div id="stl-viewer-container">
-            <div class="viewer-overlay">
-              <span class="pill" id="viewer-label">Drag to rotate &bull; Scroll to zoom</span>
-              <button id="btn-toggle-wireframe" type="button" class="btn btn-secondary" style="padding: 0.35rem 0.7rem; font-size: 0.78rem;">
-                Toggle Wireframe
+            <div class="white-panel">
+              <div class="field-group">
+                <label for="select-archetype">Replacement Attachment Style</label>
+                <select id="select-archetype" class="reform-select">
+                  <option value="friction_fit_collar">Friction-Fit Collar Sleeve (Cylindrical Shaft / Handle)</option>
+                  <option value="snap_clip_bracket">Flexible Snap-Clip Bracket (C-Clip Mount)</option>
+                  <option value="lever_cap">Slip-On Torque Lever Cap (Easy-Turn Knob Cap)</option>
+                  <option value="wing_adapter">Dual-Wing Twist Adapter (Ergonomic Butterfly Grip)</option>
+                </select>
+              </div>
+
+              <div class="field-group" style="margin-bottom: 0;">
+                <label for="input-fit-clearance">Fit Tolerance / Clearance (mm)</label>
+                <input id="input-fit-clearance" type="number" step="0.05" min="0.05" max="0.60" value="0.20" class="reform-input" />
+                <span style="display: block; margin-top: 4px; font-size: 0.76rem; color: var(--label);">
+                  0.20 mm is standard for home 3D printers so the part slides on smoothly.
+                </span>
+              </div>
+            </div>
+
+            <!-- Cleaned Photo Thumbnails -->
+            <div id="enhanced-preview-panel" class="white-panel hidden">
+              <span class="mono-label" style="font-size: 10px; color: var(--label); display: block; margin-bottom: 0.6rem;">
+                PROCESSED CAPTURE PREVIEW
+              </span>
+              <div id="enhanced-thumbs-row" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem;"></div>
+            </div>
+          </div>
+
+          <!-- Right Column: Editable Millimeter Dimensions -->
+          <div class="white-panel" style="display: flex; flex-direction: column; justify-content: space-between;">
+            <div>
+              <span class="mono-label" style="font-size: 10px; color: var(--label); display: block; margin-bottom: 0.75rem;">
+                PART DIMENSIONS (MILLIMETERS)
+              </span>
+              <div id="dimensions-list-container"></div>
+            </div>
+
+            <div style="margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--line);">
+              <label style="display: flex; align-items: center; gap: 0.65rem; cursor: pointer; font-size: 0.9rem; font-weight: 600; margin-bottom: 1rem;">
+                <input id="check-confirm-dims" type="checkbox" checked style="width: 18px; height: 18px; accent-color: #3157cc;" />
+                <span>I have reviewed these dimensions and am ready to build the 3D model</span>
+              </label>
+
+              <button id="btn-build-3d" type="button" class="btn-reform-primary" style="width: 100%;">
+                Generate 3D Printable Model &rarr;
               </button>
             </div>
           </div>
         </div>
+      </div>
+    </div>
 
-        <div>
-          <div class="verdict-box pass" style="margin-top: 0;">
-            <h3 style="margin-top: 0; font-size: 1rem;">Mesh Verification Report</h3>
-            <div id="cad-summary-metrics" class="metrics-row"></div>
-            <div id="cad-params-summary" style="font-size: 0.86rem; margin-top: 0.5rem;"></div>
-          </div>
+    <!-- ==================== STEP 3: 3D MODEL GENERATED ==================== -->
+    <div id="step-panel-3" class="studio-card hidden">
+      <h2 class="studio-title">Step 3: 3D Model Generated</h2>
+      <p class="studio-subtitle">
+        Your custom replacement part is watertight and ready for 3D printing. Rotate or zoom the model below, then download the STL or STEP file.
+      </p>
 
-          <div id="stage4-result-box" class="verdict-box hidden" style="margin-top: 1rem;">
-            <h3 style="margin-top: 0; font-size: 0.95rem;">Stage 4 Slicer Preparation (Stub)</h3>
-            <p id="stage4-message" style="font-size: 0.85rem; margin: 0.35rem 0;"></p>
-            <div id="stage4-meta" class="metrics-row"></div>
-          </div>
+      <div id="result-3d-stage" class="stl-dark-stage">
+        <div class="viewer-hud viewer-hud-top" style="color: #d8e4ee;">
+          <span><span class="live-dot"></span>WATERTIGHT 3D SOLID</span>
+          <button id="btn-wireframe-toggle" type="button" class="btn-reform-secondary" style="padding: 4px 10px; font-size: 10px; pointer-events: auto;">
+            Toggle Wireframe
+          </button>
+        </div>
+        <div class="viewer-hud viewer-hud-bottom" style="color: #94a3b8;">
+          <span>DRAG TO ROTATE</span>
+          <span>&bull;</span>
+          <span>SCROLL TO ZOOM</span>
         </div>
       </div>
-    </section>
-  </main>
+
+      <!-- Download Bar (from teammate's PhotoEntryPage.jsx) -->
+      <div class="white-panel" style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 1rem;">
+        <div>
+          <h4 id="result-file-title" style="margin: 0; font-family: 'IBM Plex Mono', monospace; font-size: 0.95rem; font-weight: 600;">
+            friction_fit_collar.stl
+          </h4>
+          <p id="result-file-meta" class="mono-label" style="margin: 4px 0 0; font-size: 10px; color: var(--label);">
+            WATERTIGHT &bull; READY FOR SLICING
+          </p>
+        </div>
+
+        <div style="display: flex; flex-wrap: wrap; gap: 0.75rem;">
+          <a id="btn-download-step" href="#" download class="btn-reform-secondary">
+            Download STEP (CAD)
+          </a>
+          <a id="btn-download-stl" href="#" download class="btn-reform-primary">
+            &#11015; Download STL for 3D Printing
+          </a>
+        </div>
+      </div>
+
+      <div style="margin-top: 1.75rem; display: flex; justify-content: space-between; align-items: center;">
+        <button id="btn-edit-dims-again" type="button" class="back-btn" style="margin-bottom: 0;">
+          &larr; Adjust Dimensions
+        </button>
+        <button id="btn-restart-repair" type="button" class="back-btn" style="margin-bottom: 0;">
+          Start New Repair &rarr;
+        </button>
+      </div>
+    </div>
+  </section>
 
   <script type="module" src="/static/app.js"></script>
 </body>

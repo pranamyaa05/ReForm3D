@@ -85,8 +85,8 @@ class Settings(BaseSettings):
     )
     gemini_model: str = Field(default="gemini-3.8-flash")
     gemini_fallback_models: str = Field(
-        default="",
-        description="Optional comma-separated fallback models (defaults to empty so only gemini-3.8-flash is called).",
+        default="gemini-3.8-flash-lite,gemini-2.5-flash-lite,gemini-flash-lite-latest,gemini-2.0-flash-lite,gemini-flash-latest,gemini-1.5-flash,gemma-3-27b-it",
+        description="Comma-separated fallback vision models with independent free-tier quota buckets when the primary model is rate-limited.",
     )
     fallback_to_mock_on_quota: bool = Field(
         default=True,
@@ -157,6 +157,10 @@ class Settings(BaseSettings):
         return value if value.is_absolute() else (PROJECT_ROOT / value)
 
     # ------------------------------------------------------------------ helpers
+    def __init__(self, **values: object) -> None:
+        super().__init__(**values)
+        object.__setattr__(self, "_explicit_init_fields", frozenset(values.keys()))
+
     def ensure_directories(self) -> None:
         """Create the upload/output directories if they do not exist yet."""
         for directory in (self.upload_dir, self.output_dir):
@@ -165,6 +169,21 @@ class Settings(BaseSettings):
     @property
     def gemini_api_key_pool(self) -> List[str]:
         """Return all valid, non-placeholder Gemini API keys configured on this Settings instance."""
+        explicit_fields: frozenset[str] = getattr(self, "_explicit_init_fields", frozenset())
+        secondary_fields = {
+            "gemini_api_key_2",
+            "gemini_api_key_3",
+            "gemini_api_key_4",
+            "gemini_api_key_5",
+            "gemini_api_keys",
+        }
+        if (
+            "gemini_api_key" in explicit_fields
+            and _is_missing_or_placeholder(self.gemini_api_key)
+            and not (secondary_fields & explicit_fields)
+        ):
+            return []
+
         raw_candidates: List[Optional[str]] = [
             self.gemini_api_key,
             self.gemini_api_key_2,

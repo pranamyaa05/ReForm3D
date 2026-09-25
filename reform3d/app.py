@@ -162,6 +162,12 @@ class FinalizePrintingRequest(BaseModel):
     printer_profile: Optional[str] = None
 
 
+class ApiKeysUpdateRequest(BaseModel):
+    """Request body for POST /api/api-keys to update the 1..5 failover API key pool at runtime."""
+
+    keys: List[str] = Field(default_factory=list)
+
+
 # --- Persistence helpers ----------------------------------------------------------
 
 
@@ -358,6 +364,83 @@ def create_app() -> FastAPI:
         return HTMLResponse(
             content="<h1>ReForm3D API is running</h1><p>Frontend static/index.html not found.</p>"
         )
+
+    # ------------------------------------------------- 0. GET & POST /api/api-keys
+    @app.get("/api/api-keys")
+    async def get_configured_api_keys() -> Dict[str, Any]:
+        """Return count and masked previews of the configured 1..5 Gemini API keys."""
+        settings = get_settings()
+        pool = settings.get_live_gemini_key_pool()
+        masked = [
+            (f"{k[:6]}...{k[-4:]}" if len(k) > 12 else "Configured")
+            for k in pool
+        ]
+        return {
+            "count": len(pool),
+            "masked_keys": masked,
+            "raw_slots": [
+                settings.gemini_api_key or "",
+                settings.gemini_api_key_2 or "",
+                settings.gemini_api_key_3 or "",
+                settings.gemini_api_key_4 or "",
+                settings.gemini_api_key_5 or "",
+            ],
+        }
+
+    @app.post("/api/api-keys")
+    async def update_api_keys(body: ApiKeysUpdateRequest) -> Dict[str, Any]:
+        """Update up to 5 Gemini API keys at runtime and persist them to .env."""
+        settings = get_settings()
+        cleaned = [k.strip() for k in body.keys if k and k.strip()]
+        if not cleaned:
+            raise HTTPException(status_code=400, detail="Provide at least one API key.")
+
+        slots = (cleaned + ["", "", "", "", ""])[:5]
+        settings.gemini_api_key = slots[0] or None
+        settings.gemini_api_key_2 = slots[1] or None
+        settings.gemini_api_key_3 = slots[2] or None
+        settings.gemini_api_key_4 = slots[3] or None
+        settings.gemini_api_key_5 = slots[4] or None
+
+        # Also update .env on disk so keys persist across server restarts
+        env_path = PROJECT_ROOT / ".env"
+        try:
+            lines = (
+                env_path.read_text(encoding="utf-8").splitlines()
+                if env_path.is_file()
+                else []
+            )
+            key_names = [
+                "GEMINI_API_KEY",
+                "GEMINI_API_KEY_2",
+                "GEMINI_API_KEY_3",
+                "GEMINI_API_KEY_4",
+                "GEMINI_API_KEY_5",
+            ]
+            updated_set = set()
+            new_lines = []
+            for line in lines:
+                matched = False
+                for idx, kname in enumerate(key_names):
+                    if line.strip().startswith(f"{kname}="):
+                        new_lines.append(f"{kname}={slots[idx]}")
+                        updated_set.add(kname)
+                        matched = True
+                        break
+                if not matched:
+                    new_lines.append(line)
+            for idx, kname in enumerate(key_names):
+                if kname not in updated_set:
+                    new_lines.append(f"{kname}={slots[idx]}")
+            env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not persist updated keys to .env: %s", exc)
+
+        pool = settings.get_live_gemini_key_pool()
+        return {
+            "count": len(pool),
+            "message": f"Saved {len(pool)} active Gemini API key(s) for automatic failover.",
+        }
 
     # ------------------------------------------------- 1. GET /api/reference-objects
     @app.get("/api/reference-objects")
