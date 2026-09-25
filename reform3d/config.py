@@ -73,9 +73,25 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # --- Stage 2: Gemini ------------------------------------------------------
+    # --- Stage 2: Gemini (supports up to 5+ automatic failover keys) ----------
     gemini_api_key: Optional[str] = Field(default=None)
+    gemini_api_key_2: Optional[str] = Field(default=None)
+    gemini_api_key_3: Optional[str] = Field(default=None)
+    gemini_api_key_4: Optional[str] = Field(default=None)
+    gemini_api_key_5: Optional[str] = Field(default=None)
+    gemini_api_keys: Optional[str] = Field(
+        default=None,
+        description="Optional comma-separated list of additional Gemini API keys.",
+    )
     gemini_model: str = Field(default="gemini-3.8-flash")
+    gemini_fallback_models: str = Field(
+        default="",
+        description="Optional comma-separated fallback models (defaults to empty so only gemini-3.8-flash is called).",
+    )
+    fallback_to_mock_on_quota: bool = Field(
+        default=True,
+        description="When True, if all configured Gemini API keys hit HTTP 429 quota exhaustion, return a fallback diagnosis with a quota notice instead of blocking Stage 2/3.",
+    )
     use_mock_vlm: bool = Field(default=False)
     gemini_max_attempts: int = Field(default=3, ge=1, le=10)
     gemini_retry_base_delay_s: float = Field(default=1.5, gt=0.0)
@@ -119,7 +135,16 @@ class Settings(BaseSettings):
     port: int = Field(default=8000, ge=1, le=65535)
 
     # ------------------------------------------------------------------ validators
-    @field_validator("gemini_api_key", "gemini_model", mode="before")
+    @field_validator(
+        "gemini_api_key",
+        "gemini_api_key_2",
+        "gemini_api_key_3",
+        "gemini_api_key_4",
+        "gemini_api_key_5",
+        "gemini_api_keys",
+        "gemini_model",
+        mode="before",
+    )
     @classmethod
     def _strip_strings(cls, value: object) -> object:
         """Trim surrounding whitespace from string env values."""
@@ -138,9 +163,59 @@ class Settings(BaseSettings):
             directory.mkdir(parents=True, exist_ok=True)
 
     @property
+    def gemini_api_key_pool(self) -> List[str]:
+        """Return all valid, non-placeholder Gemini API keys configured on this Settings instance."""
+        raw_candidates: List[Optional[str]] = [
+            self.gemini_api_key,
+            self.gemini_api_key_2,
+            self.gemini_api_key_3,
+            self.gemini_api_key_4,
+            self.gemini_api_key_5,
+            self.gemini_api_keys,
+        ]
+        pool: List[str] = []
+        for entry in raw_candidates:
+            if not entry:
+                continue
+            for part in str(entry).split(","):
+                cleaned = part.strip().strip('"').strip("'")
+                if not _is_missing_or_placeholder(cleaned) and cleaned not in pool:
+                    pool.append(cleaned)
+        return pool
+
+    def get_live_gemini_key_pool(self) -> List[str]:
+        """Return the active key pool, merging any keys freshly edited into ``.env`` on disk
+        when called on the process-wide settings singleton."""
+        pool = list(self.gemini_api_key_pool)
+        env_path = PROJECT_ROOT / ".env"
+        if self is get_settings() and env_path.is_file():
+            try:
+                from dotenv import dotenv_values
+
+                disk_vals = dotenv_values(env_path)
+                for k in (
+                    "GEMINI_API_KEY",
+                    "GEMINI_API_KEY_2",
+                    "GEMINI_API_KEY_3",
+                    "GEMINI_API_KEY_4",
+                    "GEMINI_API_KEY_5",
+                    "GEMINI_API_KEYS",
+                ):
+                    val = disk_vals.get(k)
+                    if not val:
+                        continue
+                    for part in str(val).split(","):
+                        cleaned = part.strip().strip('"').strip("'")
+                        if not _is_missing_or_placeholder(cleaned) and cleaned not in pool:
+                            pool.append(cleaned)
+            except Exception:  # noqa: BLE001
+                pass
+        return pool
+
+    @property
     def has_gemini_key(self) -> bool:
-        """True when a non-empty, non-placeholder API key is configured."""
-        return not _is_missing_or_placeholder(self.gemini_api_key)
+        """True when at least one valid, non-placeholder API key is configured."""
+        return bool(self.gemini_api_key_pool)
 
     @property
     def vlm_enabled(self) -> bool:
@@ -186,6 +261,10 @@ def find_missing_required_env(settings: Settings) -> List[str]:
     missing: List[str] = []
     for var_name, hint, escape_flag in REQUIRED_ENV_VARS:
         if getattr(settings, escape_flag.lower(), False):
+            continue
+        if var_name == "GEMINI_API_KEY":
+            if not settings.has_gemini_key:
+                missing.append(f"  - {var_name}: {hint} (or set {escape_flag}=true for local dev)")
             continue
         value = getattr(settings, var_name.lower(), None)
         if _is_missing_or_placeholder(value):

@@ -277,80 +277,141 @@ def _build_diagnosis_prompt(
 # --- Live Gemini Caller ------------------------------------------------------------
 
 
+#: Remembers the last working key index across requests so an exhausted key (#1)
+#: is not retried first on every subsequent diagnosis.
+_ACTIVE_KEY_INDEX: int = 0
+
+
 def _call_gemini_with_backoff(
     client: Any,
     model: str,
     contents: List[Any],
     config: Any,
     settings: Settings,
+    *,
+    clients: Optional[List[Tuple[str, Any]]] = None,
+    fallback_models: Optional[List[str]] = None,
 ) -> str:
-    """Execute Gemini request with retries and exponential backoff for transient issues."""
+    """Execute Gemini request with immediate multi-key failover + model fallback + exponential backoff."""
+    global _ACTIVE_KEY_INDEX
     from google.genai.errors import APIError
 
     max_attempts = settings.gemini_max_attempts
     base_delay = settings.gemini_retry_base_delay_s
 
+    # Build ordered list of (label, client_instance) pairs
+    if clients and len(clients) > 0:
+        n_keys = len(clients)
+        start_idx = _ACTIVE_KEY_INDEX % n_keys
+        ordered_clients = [clients[(start_idx + i) % n_keys] for i in range(n_keys)]
+    else:
+        ordered_clients = [("Key #1", client)]
+
+    # Build candidate models list: primary model first, then any configured fallback models
+    models_to_try: List[str] = [model]
+    if fallback_models:
+        for fm in fallback_models:
+            fm_clean = fm.strip()
+            if fm_clean and fm_clean not in models_to_try:
+                models_to_try.append(fm_clean)
+
     last_error: Optional[Exception] = None
+    last_code: int = 500
+    last_msg: str = ""
 
     for attempt in range(1, max_attempts + 1):
-        try:
-            logger.info("Calling Gemini model '%s' (attempt %d/%d)", model, attempt, max_attempts)
-            response = client.models.generate_content(
-                model=model,
-                contents=contents,
-                config=config,
+        for candidate_model in models_to_try:
+            for key_offset, (key_label, active_client) in enumerate(ordered_clients):
+                try:
+                    logger.info(
+                        "Calling Gemini model '%s' using %s (attempt %d/%d)",
+                        candidate_model,
+                        key_label,
+                        attempt,
+                        max_attempts,
+                    )
+                    response = active_client.models.generate_content(
+                        model=candidate_model,
+                        contents=contents,
+                        config=config,
+                    )
+                    if not response.text:
+                        raise VLMPermanentError("Gemini returned an empty response")
+
+                    # Remember this working key index for subsequent requests
+                    if clients and len(clients) > 0:
+                        _ACTIVE_KEY_INDEX = (_ACTIVE_KEY_INDEX + key_offset) % len(clients)
+                    return response.text
+
+                except APIError as err:
+                    last_error = err
+                    code = getattr(err, "code", 500)
+                    msg = getattr(err, "message", str(err))
+                    last_code = code
+                    last_msg = msg
+
+                    # 429 = Quota/Rate Limit; 500, 502, 503, 504 = Server Error
+                    is_transient = code in (429, 500, 502, 503, 504)
+                    is_key_issue = code in (400, 401, 403) and len(ordered_clients) > 1
+
+                    if is_transient or is_key_issue:
+                        logger.warning(
+                            "Gemini %s on %s / model '%s' (%s: %s). %s",
+                            "quota/rate limit" if code == 429 else "error",
+                            key_label,
+                            candidate_model,
+                            code,
+                            msg[:120],
+                            "Switching to next API key / fallback model..."
+                            if (len(ordered_clients) > 1 or len(models_to_try) > 1)
+                            else "Will retry after backoff...",
+                        )
+                        continue
+
+                    raise VLMPermanentError(
+                        f"Gemini API rejected request ({code}): {msg}",
+                        status_code=code,
+                    ) from err
+
+                except Exception as exc:  # noqa: BLE001
+                    last_error = exc
+                    last_msg = str(exc)
+                    logger.warning(
+                        "Gemini network/unexpected error on %s (%s): %s",
+                        key_label,
+                        candidate_model,
+                        exc,
+                    )
+                    continue
+
+        # All keys & fallback models failed on this attempt; sleep before next attempt
+        if attempt < max_attempts:
+            delay = base_delay * (2 ** (attempt - 1))
+            logger.warning(
+                "All %d configured API key(s) exhausted on attempt %d/%d. Retrying in %.2fs...",
+                len(ordered_clients),
+                attempt,
+                max_attempts,
+                delay,
             )
-            if not response.text:
-                raise VLMPermanentError("Gemini returned an empty response")
-            return response.text
+            time.sleep(delay)
 
-        except APIError as err:
-            last_error = err
-            code = getattr(err, "code", 500)
-            msg = getattr(err, "message", str(err))
-
-            # 429 = Rate Limit / Quota Exceeded; 500, 502, 503, 504 = Server error
-            is_transient = code in (429, 500, 502, 503, 504)
-            if is_transient and attempt < max_attempts:
-                delay = base_delay * (2 ** (attempt - 1))
-                logger.warning(
-                    "Gemini API transient error (%s: %s). Retrying in %.2fs (attempt %d/%d)...",
-                    code,
-                    msg,
-                    delay,
-                    attempt,
-                    max_attempts,
-                )
-                time.sleep(delay)
-                continue
-
-            if is_transient:
-                raise VLMTransientError(
-                    f"Gemini API rate limit or server error ({code}): {msg}",
-                    status_code=code,
-                ) from err
-            else:
-                raise VLMPermanentError(
-                    f"Gemini API rejected request ({code}): {msg}",
-                    status_code=code,
-                ) from err
-
-        except Exception as exc:  # noqa: BLE001
-            last_error = exc
-            if attempt < max_attempts:
-                delay = base_delay * (2 ** (attempt - 1))
-                logger.warning(
-                    "Gemini network/unexpected error: %s. Retrying in %.2fs...",
-                    exc,
-                    delay,
-                )
-                time.sleep(delay)
-                continue
+    if isinstance(last_error, APIError):
+        is_transient = last_code in (429, 500, 502, 503, 504)
+        if is_transient:
             raise VLMTransientError(
-                f"Failed to communicate with Gemini API after {max_attempts} attempts: {exc}"
-            ) from exc
+                f"Gemini API rate limit or server error across {len(ordered_clients)} key(s) ({last_code}): {last_msg}",
+                status_code=last_code,
+            ) from last_error
+        raise VLMPermanentError(
+            f"Gemini API rejected request ({last_code}): {last_msg}",
+            status_code=last_code,
+        ) from last_error
 
-    raise VLMTransientError(f"Gemini call failed: {last_error}")
+    raise VLMTransientError(
+        f"Failed to communicate with Gemini API after {max_attempts} attempts: {last_error}"
+    ) from last_error
+
 
 # --- Main Entry Point --------------------------------------------------------------
 
@@ -362,21 +423,7 @@ def diagnose_capture(
     user_notes: Optional[str] = None,
     settings: Optional[Settings] = None,
 ) -> DiagnosisResult:
-    """Diagnose a capture session and return structured :class:`DiagnosisResult`.
-
-    Args:
-        session: Completed CaptureSession with captured slots and scale reference.
-        enhancement_outcome: Optional Stage 1.5 enhancement results. When available,
-            the effective paths (enhanced when retained, raw otherwise) are fed to Gemini.
-        user_notes: Optional user context/notes passed into the prompt.
-        settings: Optional runtime settings override.
-
-    Returns:
-        Structured :class:`DiagnosisResult` ready for human verification or CAD generation.
-
-    Raises:
-        VLMError: (or VLMTransientError / VLMPermanentError) if diagnosis cannot be completed.
-    """
+    """Diagnose a capture session and return structured :class:`DiagnosisResult`."""
     config = settings or get_settings()
 
     # 1. Use offline mock ONLY when explicitly enabled via USE_MOCK_VLM=true.
@@ -384,10 +431,12 @@ def diagnose_capture(
         logger.info("Using offline mock VLM provider (USE_MOCK_VLM=true)")
         return mock_diagnosis(session)
 
-    if not config.has_gemini_key:
+    key_pool = config.get_live_gemini_key_pool()
+    if not key_pool:
         raise VLMPermanentError(
             "GEMINI_API_KEY is missing or set to a placeholder value. "
-            "Set a valid GEMINI_API_KEY in .env, or set USE_MOCK_VLM=true for offline development.",
+            "Set one or more valid keys (GEMINI_API_KEY, GEMINI_API_KEY_2..5) in .env, "
+            "or set USE_MOCK_VLM=true for offline development.",
             status_code=500,
         )
 
@@ -401,20 +450,24 @@ def diagnose_capture(
         ) from err
 
     timeout_ms = int(config.gemini_request_timeout_s * 1000)
-    client = genai.Client(
-        api_key=config.gemini_api_key,
-        http_options=types.HttpOptions(timeout=timeout_ms),
-    )
+    clients: List[Tuple[str, Any]] = [
+        (
+            f"Key #{idx + 1}",
+            genai.Client(
+                api_key=k,
+                http_options=types.HttpOptions(timeout=timeout_ms),
+            ),
+        )
+        for idx, k in enumerate(key_pool)
+    ]
 
     # 3. Assemble images
-    # We inspect slots in canonical order (straight_on, angled, mating_surface)
     contents: List[Any] = []
     text_prompt = _build_diagnosis_prompt(session.reference, user_notes)
     contents.append(text_prompt)
 
     images_added = 0
     for kind in ShotKind:
-        # Check enhancement outcome first, then session slot
         effective_path: Optional[Path] = None
         if enhancement_outcome:
             slot_enh = enhancement_outcome.for_kind(kind)
@@ -444,14 +497,43 @@ def diagnose_capture(
         max_output_tokens=config.gemini_max_output_tokens,
     )
 
-    # 5. Call API with retries
-    raw_json = _call_gemini_with_backoff(
-        client=client,
-        model=config.gemini_model,
-        contents=contents,
-        config=gen_config,
-        settings=config,
-    )
+    fallback_models = [
+        m.strip()
+        for m in (getattr(config, "gemini_fallback_models", "") or "").split(",")
+        if m.strip() and "2.5" not in m
+    ]
+
+    # 5. Call API with multi-key rotation and backoff retries
+    try:
+        raw_json = _call_gemini_with_backoff(
+            client=clients[0][1],
+            model=config.gemini_model,
+            contents=contents,
+            config=gen_config,
+            settings=config,
+            clients=clients,
+            fallback_models=fallback_models,
+        )
+    except VLMTransientError as err:
+        if getattr(config, "fallback_to_mock_on_quota", True) and err.status_code == 429:
+            logger.warning(
+                "All %d configured Gemini API key(s) reached HTTP 429 quota limit; "
+                "falling back to deterministic diagnosis so Stage 2/3 can proceed.",
+                len(clients),
+            )
+            fallback_diag = mock_diagnosis(session)
+            return fallback_diag.model_copy(
+                update={
+                    "notes": (
+                        f"[Quota Notice: All {len(clients)} configured Gemini API key(s) "
+                        "hit the free-tier HTTP 429 rate/quota limit on gemini-3.8-flash. "
+                        "Add GEMINI_API_KEY_2..5 in .env for fresh quota. Using fallback "
+                        f"measurements so you can verify and generate CAD.] {fallback_diag.notes}"
+                    ),
+                    "requires_manual_confirmation": True,
+                }
+            )
+        raise
 
     # 6. Parse and validate with Pydantic
     try:
