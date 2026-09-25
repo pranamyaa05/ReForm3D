@@ -1,0 +1,34 @@
+# ReForm3D — Python dependencies
+#
+# NOTE: cadquery pulls in CadQuery's OpenCascade bindings (cadquery-ocp), which are NOT
+# pure Python and are the reason a plain `pip install` is large/slow. See SETUP.md.
+
+# --- Web layer -------------------------------------------------------------------
+fastapi>=0.111
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+jinja2>=3.1
+
+# --- Configuration ---------------------------------------------------------------
+pydantic>=2.7
+pydantic-settings>=2.3
+python-dotenv>=1.0
+
+# --- Stage 2: vision-language model ----------------------------------------------
+# google-generativeai is deprecated; the supported SDK is google-genai.
+google-genai>=2.0
+
+# --- Stage 1 / 1.5: image quality + deterministic enhancement --------------------
+numpy>=1.26
+pillow>=10.3
+opencv-python-headless>=4.9
+rembg[cpu]>=2.0.57
+
+# --- Stage 3: parametric CAD -----------------------------------------------------
+# cadquery-ocp (OpenCascade bindings) is a large binary dependency, not pure Python.
+cadquery>=2.4
+trimesh>=4.4
+
+# --- Tests -----------------------------------------------------------------------
+pytest>=8.0
+httpx>=0.27

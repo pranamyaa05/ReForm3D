@@ -1,0 +1,37 @@
+# --- Secrets: never commit these ------------------------------------------------
+.env
+*.env
+!.env.example
+
+# --- Python ---------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+
+# --- Test / tooling caches ------------------------------------------------------
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- ReForm3D local data ---------------------------------------------------------
+# Uploaded photos, enhanced images and generated STL/STEP files stay local.
+data/
+
+# --- Local rembg / U^2-Net model weights (downloaded on first run) ---------------
+*.onnx
+.u2net/
+
+# --- OS noise -------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
